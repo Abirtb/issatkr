@@ -1,0 +1,214 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  DEPARTMENT_HEAD
+  PROF
+}
+
+enum AlertLevel {
+  NORMAL
+  WARNING
+  ELIMINATED
+}
+
+enum NotificationType {
+  WARNING
+  ELIMINATION
+}
+
+enum NotificationStatus {
+  PENDING
+  SENDING
+  SENT
+  FAILED
+}
+
+model User {
+  id                   String       @id @default(cuid())
+  email                String       @unique
+  password             String
+  name                 String
+  role                 Role         @default(PROF)
+  active               Boolean      @default(true)
+  createdAt            DateTime     @default(now())
+  updatedAt            DateTime     @default(now()) @updatedAt
+  taughtSessions       Session[]    @relation("SessionProfessor")
+  attendanceAmendments Attendance[] @relation("AttendanceAmendments")
+}
+
+model AcademicLevel {
+  id         String             @id @default(cuid())
+  code       String             @unique
+  name       String
+  active     Boolean            @default(true)
+  createdAt  DateTime           @default(now())
+  updatedAt  DateTime           @default(now()) @updatedAt
+  classes    Class[]
+  thresholds AbsenceThreshold[]
+  alertStates AlertState[]
+  notifications NotificationLog[]
+}
+
+model Subject {
+  id            String             @id @default(cuid())
+  code          String             @unique
+  name          String
+  active        Boolean            @default(true)
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @default(now()) @updatedAt
+  sessions      Session[]
+  thresholds    AbsenceThreshold[]
+  alertStates   AlertState[]
+  notifications NotificationLog[]
+}
+
+model Class {
+  id           String    @id @default(cuid())
+  name         String
+  code         String    @unique
+  externalId   String?   @unique
+  program      String?
+  academicYear String?
+  semester     Int?
+  levelId      String?
+  level        AcademicLevel? @relation(fields: [levelId], references: [id], onDelete: SetNull)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @default(now()) @updatedAt
+  students     Student[]
+  sessions     Session[]
+
+  @@index([levelId])
+}
+
+model Student {
+  id           String       @id @default(cuid())
+  matricule    String
+  cin          String?
+  firstName    String
+  lastName     String
+  firstNameAr  String?
+  lastNameAr   String?
+  email        String?
+  phone        String?
+  active       Boolean      @default(true)
+  classId      String
+  class        Class        @relation(fields: [classId], references: [id], onDelete: Cascade)
+  attendances Attendance[]
+  alertStates AlertState[]
+  notifications NotificationLog[]
+
+  @@unique([matricule, classId])
+  @@index([classId])
+  @@index([classId, active])
+}
+
+model Session {
+  id           String       @id @default(cuid())
+  classId      String
+  class        Class        @relation(fields: [classId], references: [id], onDelete: Cascade)
+  professorId  String?
+  professor    User?        @relation("SessionProfessor", fields: [professorId], references: [id], onDelete: SetNull)
+  subjectId    String?
+  subject      Subject?     @relation(fields: [subjectId], references: [id], onDelete: Restrict)
+  courseName   String
+  courseCode   String?
+  date         DateTime
+  startTime    String
+  endTime      String?
+  room         String?
+  createdAt    DateTime     @default(now())
+  finalizedAt  DateTime?
+  attendances  Attendance[]
+
+  @@index([classId, date])
+  @@index([professorId, date])
+  @@index([subjectId, date])
+  @@unique([classId, courseName, date, startTime])
+}
+
+model Attendance {
+  id            String   @id @default(cuid())
+  studentId     String
+  sessionId     String
+  present       Boolean  @default(true)
+  justification String?
+  amendedAt     DateTime?
+  amendedById   String?
+  createdAt     DateTime @default(now())
+  student       Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  session       Session  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  amendedBy     User?    @relation("AttendanceAmendments", fields: [amendedById], references: [id], onDelete: SetNull)
+
+  @@unique([studentId, sessionId])
+  @@index([sessionId])
+  @@index([amendedById])
+}
+
+model Setting {
+  key   String @id
+  value String
+}
+
+model AbsenceThreshold {
+  id               String        @id @default(cuid())
+  subjectId        String
+  levelId          String
+  eliminationCount Int
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @default(now()) @updatedAt
+  subject          Subject       @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  level            AcademicLevel @relation(fields: [levelId], references: [id], onDelete: Cascade)
+
+  @@unique([subjectId, levelId])
+  @@index([levelId])
+}
+
+model AlertState {
+  id               String        @id @default(cuid())
+  studentId        String
+  subjectId        String
+  levelId          String
+  level            AlertLevel    @default(NORMAL)
+  lastAbsenceCount Int           @default(0)
+  episode          Int           @default(0)
+  updatedAt        DateTime      @default(now()) @updatedAt
+  student          Student       @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  subject          Subject       @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  academicLevel    AcademicLevel @relation(fields: [levelId], references: [id], onDelete: Cascade)
+
+  @@unique([studentId, subjectId, levelId])
+  @@index([subjectId, levelId])
+}
+
+model NotificationLog {
+  id           String             @id @default(cuid())
+  studentId    String
+  subjectId    String
+  levelId      String
+  type         NotificationType
+  status       NotificationStatus @default(PENDING)
+  recipient    String
+  absenceCount Int
+  threshold    Int
+  episode      Int
+  dedupKey     String             @unique
+  attempts     Int                @default(0)
+  error        String?
+  sentAt       DateTime?
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @default(now()) @updatedAt
+  student      Student            @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  subject      Subject            @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  level        AcademicLevel      @relation(fields: [levelId], references: [id], onDelete: Cascade)
+
+  @@index([status, createdAt])
+  @@index([studentId, subjectId])
+}

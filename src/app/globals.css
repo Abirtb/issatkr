@@ -1,0 +1,106 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  --navy: #0b1c33;
+  --navy-deep: #071221;
+  --navy-mid: #143054;
+  --navy-soft: #1c3d66;
+  --gold: #e29a2b;
+  --gold-soft: #f3c57a;
+  --silver: #b7c4d4;
+  --bg: #f4f6f9;
+  --surface: #ffffff;
+  --surface-2: #eef1f6;
+  --border: #e3e8ef;
+  --text: #121826;
+  --muted: #667085;
+  --ring: rgba(226, 154, 43, 0.35);
+  --shadow: 0 1px 2px rgba(11, 28, 51, 0.04), 0 12px 32px rgba(11, 28, 51, 0.06);
+}
+
+.dark {
+  --navy: #0d213b;
+  --navy-deep: #050d18;
+  --navy-mid: #163456;
+  --navy-soft: #214770;
+  --gold: #e7a53c;
+  --gold-soft: #f0c57a;
+  --silver: #8ea0b5;
+  --bg: #07111e;
+  --surface: #0e1a2b;
+  --surface-2: #132338;
+  --border: #1e334d;
+  --text: #f3f6fa;
+  --muted: #9aa8b8;
+  --ring: rgba(231, 165, 60, 0.4);
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.2), 0 18px 40px rgba(0, 0, 0, 0.28);
+}
+
+@theme inline {
+  --color-navy: var(--navy);
+  --color-navy-deep: var(--navy-deep);
+  --color-navy-mid: var(--navy-mid);
+  --color-navy-soft: var(--navy-soft);
+  --color-gold: var(--gold);
+  --color-gold-soft: var(--gold-soft);
+  --color-silver: var(--silver);
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-border: var(--border);
+  --color-ink: var(--text);
+  --color-muted: var(--muted);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+html,
+body {
+  background: var(--bg);
+  color: var(--text);
+}
+
+body {
+  font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  letter-spacing: -0.011em;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--gold) 28%, transparent);
+}
+
+.surface-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow);
+}
+
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--surface-2) 0%,
+    color-mix(in srgb, var(--surface) 70%, var(--silver)) 50%,
+    var(--surface-2) 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.4s ease-in-out infinite;
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: 100% 0;
+  }
+  100% {
+    background-position: -100% 0;
+  }
+}

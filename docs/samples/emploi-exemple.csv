@@ -1,0 +1,4 @@
+classe,matiere,code,date,heure_debut,heure_fin,salle,enseignant_email
+GL3A,Architecture distribuee,ASD401,2026-09-08,08:30,10:00,Amphi B,prof@issatkr.tn
+GL3A,Intelligence artificielle,IA310,2026-09-08,14:00,15:30,Lab 2,prof@issatkr.tn
+GL3A,Genie logiciel avance,GLA320,2026-09-09,10:15,11:45,Salle 12,prof@issatkr.tn
