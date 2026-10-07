@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { csvRow } from "@/lib/csv";
+import { useRevealOnOpen } from "@/lib/use-reveal";
 
 type Role = "ADMIN" | "DEPARTMENT_HEAD" | "PROF";
 type UserRow = {
@@ -32,6 +34,11 @@ export function AdminUsers() {
     (UserRow & { password?: string }) | null
   >(null);
   const [message, setMessage] = useState("");
+  const editForm = useRevealOnOpen<HTMLFormElement>(editing?.id);
+  const [importing, setImporting] = useState(false);
+  const [credentials, setCredentials] = useState<
+    { name: string; email: string; password: string }[]
+  >([]);
 
   const load = useCallback(async () => {
     const response = await fetch("/api/admin/users");
@@ -84,12 +91,85 @@ export function AdminUsers() {
     if (response.ok) await load();
   }
 
+  async function importTeachers(file: File) {
+    setImporting(true);
+    setMessage("");
+    setCredentials([]);
+    const body = new FormData();
+    body.set("file", file);
+    const response = await fetch("/api/admin/users/import", {
+      method: "POST",
+      body,
+    });
+    const data = await response.json();
+    setImporting(false);
+    if (!response.ok) {
+      setMessage(data.error);
+      return;
+    }
+    setCredentials(data.credentials);
+    setMessage(
+      [
+        `${data.created} comptes créés, ${data.updated} mis à jour`,
+        ...data.errors,
+      ].join("\n"),
+    );
+    await load();
+  }
+
+  function downloadCredentials() {
+    const csv = [
+      "nom;email;mot_de_passe",
+      ...credentials.map((row) => csvRow([row.name, row.email, row.password])),
+    ].join("\r\n");
+    const url = URL.createObjectURL(
+      new Blob([`﻿${csv}`], { type: "text/csv;charset=utf-8" }),
+    );
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "identifiants-enseignants.csv";
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+
   return (
     <div>
       <h1 className="text-2xl font-semibold">Utilisateurs et accès</h1>
       <p className="mt-1 text-sm text-muted">
         Administration, chefs de département et enseignants.
       </p>
+
+      <div className="surface-card mt-6 rounded-xl border-l-4 border-l-gold p-4">
+        <p className="font-semibold">Importer des enseignants (CSV / Excel)</p>
+        <p className="mt-1 text-sm text-muted">
+          Colonnes : nom, prenom (ou nom_complet), email. Facultatif :
+          mot_de_passe, role (enseignant, chef, admin). Les comptes existants
+          sont mis à jour ; un mot de passe est généré si la colonne est vide.
+        </p>
+        <div className="mt-3 flex flex-wrap gap-2">
+          <label className={importing ? "pointer-events-none opacity-60" : "cursor-pointer"}>
+            <span className="inline-flex h-10 items-center rounded-lg bg-gold px-4 text-sm font-medium text-navy-deep">
+              {importing ? "Import en cours…" : "Choisir un fichier CSV / XLSX"}
+            </span>
+            <input
+              type="file"
+              accept=".csv,.xls,.xlsx"
+              className="hidden"
+              disabled={importing}
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                if (file) void importTeachers(file);
+                event.target.value = "";
+              }}
+            />
+          </label>
+          {credentials.length ? (
+            <Button variant="secondary" onClick={downloadCredentials}>
+              Télécharger les identifiants ({credentials.length})
+            </Button>
+          ) : null}
+        </div>
+      </div>
 
       <form
         onSubmit={create}
@@ -136,7 +216,9 @@ export function AdminUsers() {
         </Button>
       </form>
 
-      {message ? <p className="mt-3 text-sm text-gold">{message}</p> : null}
+      {message ? (
+        <p className="mt-3 whitespace-pre-line text-sm text-gold">{message}</p>
+      ) : null}
 
       <div className="mt-6 overflow-x-auto rounded-xl border border-border">
         <table className="w-full min-w-[680px] text-sm">
@@ -161,11 +243,11 @@ export function AdminUsers() {
                 <td className="px-4 py-3">
                   {user.active ? "Actif" : "Désactivé"}
                 </td>
-                <td className="space-x-3 px-4 py-3 text-right">
+                <td className="space-x-2 whitespace-nowrap px-4 py-2 text-right">
                   <button
                     type="button"
                     onClick={() => setEditing({ ...user, password: "" })}
-                    className="text-navy hover:underline"
+                    className="min-h-9 px-1 text-navy hover:underline"
                   >
                     Modifier
                   </button>
@@ -173,7 +255,7 @@ export function AdminUsers() {
                     <button
                       type="button"
                       onClick={() => void deactivate(user.id)}
-                      className="text-red-700 hover:underline"
+                      className="min-h-9 px-1 text-red-700 hover:underline"
                     >
                       Désactiver
                     </button>
@@ -187,6 +269,7 @@ export function AdminUsers() {
 
       {editing ? (
         <form
+          ref={editForm}
           onSubmit={save}
           className="surface-card mt-4 grid gap-3 rounded-xl p-4 sm:grid-cols-2"
         >

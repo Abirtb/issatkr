@@ -156,7 +156,8 @@ export function parseWorkbook(buffer: ArrayBuffer): Row[] {
 export function parseStudentsRows(rows: Row[]) {
   return rows
     .map((row) => ({
-      matricule: pick(row, ["matricule", "numero", "num_inscription", "id", "cin"]),
+      // Never fall back to the CIN: the matricule is shown to every teacher.
+      matricule: pick(row, ["matricule", "numero", "num_inscription", "id"]),
       firstName: pick(row, ["prenom", "firstname", "first_name", "nom_prenom"]),
       lastName: pick(row, ["nom", "lastname", "last_name", "nom_famille"]),
     }))
@@ -209,4 +210,84 @@ export function parseDate(raw: string): Date | null {
   }
   const d = new Date(s);
   return Number.isNaN(d.getTime()) ? null : d;
+}
+
+// CINs lose leading zeros when Excel stores them as numbers.
+export function normalizeCin(value: string) {
+  const compact = value.trim().toUpperCase().replace(/[\s.\-]/g, "");
+  return /^\d+$/.test(compact) ? compact.replace(/^0+/, "") : compact;
+}
+
+export type CinEmailRow = { cin: string; email: string; name: string };
+
+// Reads every sheet looking for a header row with a CIN column and an e-mail column.
+export function parseCinEmailWorkbook(buffer: ArrayBuffer): CinEmailRow[] {
+  const workbook = XLSX.read(buffer, { type: "array" });
+  const result: CinEmailRow[] = [];
+  for (const sheetName of workbook.SheetNames) {
+    const sheet = workbook.Sheets[sheetName];
+    if (!sheet) continue;
+    const rows = XLSX.utils.sheet_to_json<unknown[]>(sheet, {
+      header: 1,
+      defval: "",
+      blankrows: false,
+      raw: false,
+    });
+    const headerIndex = rows.findIndex(
+      (row) =>
+        row.some((cell) => norm(text(cell)) === "cin") &&
+        row.some((cell) => norm(text(cell)).includes("mail")),
+    );
+    if (headerIndex < 0) continue;
+    const headers = rows[headerIndex].map((cell) => norm(text(cell)));
+    const cinColumn = headers.indexOf("cin");
+    const emailColumn = headers.findIndex((header) => header.includes("mail"));
+    const nameColumns = headers
+      .map((header, index) => ({ header, index }))
+      .filter(({ header }) => /^(nom|prenom|name)/.test(header))
+      .map(({ index }) => index);
+    for (const row of rows.slice(headerIndex + 1)) {
+      const cin = text(row[cinColumn]);
+      const email = text(row[emailColumn]).toLowerCase();
+      if (!cin || !email) continue;
+      result.push({
+        cin,
+        email,
+        name: nameColumns.map((index) => text(row[index])).filter(Boolean).join(" "),
+      });
+      if (result.length > MAX_IMPORT_ROWS) return result;
+    }
+  }
+  return result;
+}
+
+export type TeacherRow = {
+  name: string;
+  email: string;
+  password: string;
+  role: "ADMIN" | "DEPARTMENT_HEAD" | "PROF" | null;
+};
+
+function parseRole(raw: string): TeacherRow["role"] {
+  const value = norm(raw);
+  if (!value) return null;
+  if (value.startsWith("admin")) return "ADMIN";
+  if (value.includes("chef") || value.includes("head")) return "DEPARTMENT_HEAD";
+  return "PROF";
+}
+
+export function parseTeacherRows(rows: Row[]): TeacherRow[] {
+  return rows
+    .map((row) => {
+      const fullName = pick(row, ["nom_complet", "nom_prenom", "name", "enseignant", "full_name"]);
+      const lastName = pick(row, ["nom", "last_name", "lastname"]);
+      const firstName = pick(row, ["prenom", "first_name", "firstname"]);
+      return {
+        name: fullName || [firstName, lastName].filter(Boolean).join(" "),
+        email: pick(row, ["email", "e-mail", "mail", "adresse_email"]).toLowerCase(),
+        password: pick(row, ["mot_de_passe", "password", "mdp"]),
+        role: parseRole(pick(row, ["role", "rôle", "fonction"])),
+      };
+    })
+    .filter((row) => row.email);
 }

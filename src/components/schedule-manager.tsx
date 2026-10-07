@@ -233,9 +233,9 @@ export function ScheduleManager() {
         </div>
       </form>
 
-      <div className="mt-4 flex items-center gap-3">
-        <label className="cursor-pointer">
-          <span className="inline-flex h-9 items-center rounded-lg border border-border px-3 text-sm">
+      <div className="mt-4 flex flex-wrap items-center gap-3">
+        <label className="shrink-0 cursor-pointer">
+          <span className="inline-flex h-10 items-center whitespace-nowrap rounded-lg border border-border px-3 text-sm">
             {importing ? "Import…" : "Importer Excel/CSV"}
           </span>
           <input
@@ -264,7 +264,7 @@ export function ScheduleManager() {
             key={session.id}
             className="surface-card flex flex-wrap items-center gap-3 rounded-xl p-4"
           >
-            <div className="min-w-0 flex-1">
+            <div className="min-w-0 basis-full sm:basis-auto sm:flex-1">
               <p className="font-medium">
                 {session.subject?.name ?? session.class.name} ·{" "}
                 {session.class.name}
@@ -277,7 +277,7 @@ export function ScheduleManager() {
                 {session.room ? ` · ${session.room}` : ""}
               </p>
             </div>
-            <span className="text-xs text-muted">
+            <span className="mr-auto text-xs text-muted sm:mr-0">
               {session._count.attendances
                 ? `${session._count.attendances} pointages`
                 : "Non pointée"}

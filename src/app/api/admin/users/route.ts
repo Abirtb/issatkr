@@ -1,13 +1,15 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { hashPassword, requireAdmin } from "@/lib/auth";
+import { hashPassword, requireAdmin, authFailure } from "@/lib/auth";
 import { prisma } from "@/lib/db";
+import { newPasswordField } from "@/lib/password-policy";
+import { audit } from "@/lib/security-log";
 
 const roleSchema = z.enum(["ADMIN", "DEPARTMENT_HEAD", "PROF"]);
 const createSchema = z.object({
   name: z.string().trim().min(2).max(100),
   email: z.string().trim().toLowerCase().email().max(200),
-  password: z.string().min(8).max(100),
+  password: newPasswordField,
   role: roleSchema,
 });
 const updateSchema = z.object({
@@ -16,7 +18,7 @@ const updateSchema = z.object({
   email: z.string().trim().toLowerCase().email().max(200),
   role: roleSchema,
   active: z.boolean(),
-  password: z.union([z.string().min(8).max(100), z.literal("")]).optional(),
+  password: z.union([newPasswordField, z.literal("")]).optional(),
 });
 
 const selection = {
@@ -38,14 +40,16 @@ export async function GET() {
         orderBy: [{ active: "desc" }, { name: "asc" }],
       }),
     );
-  } catch {
+  } catch (error) {
+    const denied = authFailure(error);
+    if (denied) return denied;
     return NextResponse.json({ error: "Non autorisé" }, { status: 403 });
   }
 }
 
 export async function POST(req: Request) {
   try {
-    await requireAdmin();
+    const admin = await requireAdmin();
     const input = createSchema.parse(await req.json());
     const user = await prisma.user.create({
       data: {
@@ -56,8 +60,11 @@ export async function POST(req: Request) {
       },
       select: selection,
     });
+    await audit(admin, "user.create", { type: "user", id: user.id }, { role: user.role }, req);
     return NextResponse.json(user, { status: 201 });
   } catch (error) {
+    const denied = authFailure(error);
+    if (denied) return denied;
     const message =
       error instanceof z.ZodError
         ? error.issues[0]?.message
@@ -76,6 +83,19 @@ export async function PATCH(req: Request) {
         { status: 400 },
       );
     }
+    // Self-deactivation is refused above, so only a self-demotion can leave the
+    // school without any administrator.
+    if (input.id === admin.id && input.role !== "ADMIN") {
+      const otherAdmins = await prisma.user.count({
+        where: { role: "ADMIN", active: true, id: { not: admin.id } },
+      });
+      if (otherAdmins === 0) {
+        return NextResponse.json(
+          { error: "Impossible : vous êtes le dernier administrateur actif" },
+          { status: 400 },
+        );
+      }
+    }
     const user = await prisma.user.update({
       where: { id: input.id },
       data: {
@@ -89,8 +109,11 @@ export async function PATCH(req: Request) {
       },
       select: selection,
     });
+    await audit(admin, "user.update", { type: "user", id: user.id }, { role: user.role, active: user.active, passwordReset: Boolean(input.password) }, req);
     return NextResponse.json(user);
   } catch (error) {
+    const denied = authFailure(error);
+    if (denied) return denied;
     const message =
       error instanceof z.ZodError
         ? error.issues[0]?.message
@@ -116,8 +139,11 @@ export async function DELETE(req: Request) {
     if (!result.count) {
       return NextResponse.json({ error: "Compte introuvable" }, { status: 404 });
     }
+    await audit(admin, "user.deactivate", { type: "user", id: id }, undefined, req);
     return NextResponse.json({ ok: true });
-  } catch {
+  } catch (error) {
+    const denied = authFailure(error);
+    if (denied) return denied;
     return NextResponse.json({ error: "Suppression impossible" }, { status: 400 });
   }
 }

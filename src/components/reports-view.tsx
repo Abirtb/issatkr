@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { csvRow } from "@/lib/csv";
 
 type Ref = { id: string; code: string; name: string };
 type ReportRow = {
@@ -71,7 +72,7 @@ export function ReportsView() {
     const header =
       "Matricule;Nom;Prenom;Classe;Niveau;Matiere;Presences;Absences;Justifiees;Seuil;Statut\n";
     const lines = rows.map((row) =>
-      [
+      csvRow([
         row.student.matricule,
         row.student.lastName,
         row.student.firstName,
@@ -83,7 +84,7 @@ export function ReportsView() {
         row.justified,
         row.threshold,
         row.status,
-      ].join(";"),
+      ]),
     );
     const blob = new Blob([`\uFEFF${header}${lines.join("\n")}`], {
       type: "text/csv;charset=utf-8",

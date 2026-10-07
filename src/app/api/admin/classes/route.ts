@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { requireAdmin } from "@/lib/auth";
+import { requireAdmin, authFailure } from "@/lib/auth";
 import { prisma } from "@/lib/db";
+import { audit } from "@/lib/security-log";
 
 const classSchema = z.object({
   id: z.string().min(1).optional(),
@@ -29,14 +30,16 @@ export async function GET() {
       },
     });
     return NextResponse.json(classes);
-  } catch {
+  } catch (error) {
+    const denied = authFailure(error);
+    if (denied) return denied;
     return NextResponse.json({ error: "Non autorisé" }, { status: 403 });
   }
 }
 
 export async function POST(req: Request) {
   try {
-    await requireAdmin();
+    const admin = await requireAdmin();
     const input = classSchema.parse(await req.json());
     const cls = await prisma.class.create({
       data: {
@@ -48,15 +51,18 @@ export async function POST(req: Request) {
         levelId: input.levelId ?? null,
       },
     });
+    await audit(admin, "class.create", { type: "class", id: cls.id }, undefined, req);
     return NextResponse.json(cls, { status: 201 });
-  } catch {
+  } catch (error) {
+    const denied = authFailure(error);
+    if (denied) return denied;
     return NextResponse.json({ error: "Erreur création classe" }, { status: 400 });
   }
 }
 
 export async function PATCH(req: Request) {
   try {
-    await requireAdmin();
+    const admin = await requireAdmin();
     const input = classSchema.parse(await req.json());
     if (!input.id) {
       return NextResponse.json({ error: "ID classe requis" }, { status: 400 });
@@ -72,11 +78,40 @@ export async function PATCH(req: Request) {
         levelId: input.levelId ?? null,
       },
     });
+    await audit(admin, "class.update", { type: "class", id: cls.id }, undefined, req);
     return NextResponse.json(cls);
-  } catch {
+  } catch (error) {
+    const denied = authFailure(error);
+    if (denied) return denied;
     return NextResponse.json(
       { error: "Données invalides ou code déjà utilisé" },
       { status: 400 },
     );
+  }
+}
+
+export async function DELETE(req: Request) {
+  try {
+    const admin = await requireAdmin();
+    const id = new URL(req.url).searchParams.get("id");
+    if (!id) {
+      return NextResponse.json({ error: "ID classe requis" }, { status: 400 });
+    }
+    const sessions = await prisma.session.count({ where: { classId: id } });
+    if (sessions > 0) {
+      return NextResponse.json(
+        {
+          error: `Cette classe a ${sessions} séance(s) : supprimez-les d’abord dans l’emploi du temps pour ne pas perdre l’historique des présences.`,
+        },
+        { status: 409 },
+      );
+    }
+    await prisma.class.delete({ where: { id } });
+    await audit(admin, "class.delete", { type: "class", id: id }, undefined, req);
+    return NextResponse.json({ ok: true });
+  } catch (error) {
+    const denied = authFailure(error);
+    if (denied) return denied;
+    return NextResponse.json({ error: "Suppression impossible" }, { status: 400 });
   }
 }

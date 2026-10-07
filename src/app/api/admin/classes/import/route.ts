@@ -1,20 +1,48 @@
 import { NextResponse } from "next/server";
-import { requireAdmin } from "@/lib/auth";
+import { requireAdmin, authFailure } from "@/lib/auth";
 import { prisma } from "@/lib/db";
+import { throttleUser } from "@/lib/rate-limit";
+import { audit, logServerError } from "@/lib/security-log";
 import {
   MAX_IMPORT_BYTES,
   MAX_IMPORT_ROWS,
+  parseCinEmailWorkbook,
   parseEnrollmentWorkbook,
 } from "@/lib/parse-upload";
+import { applyEmailsByCin } from "@/lib/student-emails";
+import { cleanCin } from "@/lib/student-fields";
 
 export async function POST(req: Request) {
   try {
-    await requireAdmin();
+    const admin = await requireAdmin();
+    const throttled = throttleUser(admin.id, "import");
+    if (throttled) return throttled;
     const form = await req.formData();
     const file = form.get("file");
+    const emailsFile = form.get("emailsFile");
     const replace = form.get("replace") !== "false";
     if (!(file instanceof File)) {
       return NextResponse.json({ error: "Fichier requis" }, { status: 400 });
+    }
+    const hasEmailsFile = emailsFile instanceof File && emailsFile.size > 0;
+    if (
+      hasEmailsFile &&
+      (!/\.(csv|xlsx|xls)$/i.test(emailsFile.name) ||
+        emailsFile.size > MAX_IMPORT_BYTES)
+    ) {
+      return NextResponse.json(
+        { error: "Fichier e-mails : CSV, XLSX ou XLS de 5 Mo maximum" },
+        { status: 400 },
+      );
+    }
+    const emailRows = hasEmailsFile
+      ? parseCinEmailWorkbook(await emailsFile.arrayBuffer())
+      : [];
+    if (hasEmailsFile && emailRows.length === 0) {
+      return NextResponse.json(
+        { error: "Fichier e-mails : colonnes CIN et E-mail introuvables" },
+        { status: 400 },
+      );
     }
     if (!/\.(xls|xlsx)$/i.test(file.name)) {
       return NextResponse.json(
@@ -126,7 +154,7 @@ export async function POST(req: Request) {
               },
               create: {
                 ...student,
-                cin: student.cin || null,
+                cin: cleanCin(student.cin),
                 firstNameAr: student.firstNameAr || null,
                 lastNameAr: student.lastNameAr || null,
                 email: student.email || null,
@@ -135,13 +163,14 @@ export async function POST(req: Request) {
                 active: true,
               },
               update: {
-                cin: student.cin || null,
+                cin: cleanCin(student.cin),
                 firstName: student.firstName,
                 lastName: student.lastName,
                 firstNameAr: student.firstNameAr || null,
                 lastNameAr: student.lastNameAr || null,
-                email: student.email || null,
-                phone: student.phone || null,
+                // Keep values filled in earlier (e.g. e-mails merged by CIN).
+                email: student.email || undefined,
+                phone: student.phone || undefined,
                 active: true,
               },
             });
@@ -150,16 +179,27 @@ export async function POST(req: Request) {
           }
         }
 
+        const emails = emailRows.length
+          ? await applyEmailsByCin(tx, emailRows)
+          : null;
+
         return {
           classesCreated,
           classesUpdated,
           studentsCreated,
           studentsUpdated,
+          emails,
         };
       },
       { timeout: 30_000 },
     );
 
+    await audit(admin, "students.import", { type: "workbook" }, {
+      sheets: groups.length,
+      rows: totalRows,
+      emailRows: emailRows.length,
+      replace,
+    }, req);
     return NextResponse.json({
       ...result,
       groups: groups.map((group) => ({
@@ -175,7 +215,9 @@ export async function POST(req: Request) {
         ),
     });
   } catch (error) {
-    console.error(error);
+    const denied = authFailure(error);
+    if (denied) return denied;
+    logServerError("classes.import", error);
     return NextResponse.json(
       { error: "Import du fichier scolarité échoué" },
       { status: 500 },
