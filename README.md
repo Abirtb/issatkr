@@ -1,13 +1,16 @@
-# ISSATKR Présence — Déploiement
+# ISSATKR Présence
 
-## Démarrage rapide
+> **Production :** suivre [DEPLOYMENT.md](DEPLOYMENT.md) (Docker, Nginx/HTTPS, base de production
+> créée par `prisma migrate deploy`, sauvegardes). Ne jamais utiliser `prisma/dev.db` en production.
+
+## Démarrage rapide (développement local)
 
 ```bash
 cp .env.example .env
 # Modifier AUTH_SECRET et mots de passe
 
 npm install
-npm run db:setup    # migrations + comptes configurés dans .env
+npm run db:setup    # migrations + données de démonstration (développement uniquement)
 npm run dev
 ```
 
@@ -35,8 +38,9 @@ Fichiers exemple : `docs/samples/`
 3. **Éliminés** — liste des étudiants au seuil
 4. **Rapports** — tableau + export CSV
 
-Une séance finalisée est en lecture seule pour l’enseignant. L’administration
-reste seule autorisée à la corriger et à ajouter un justificatif.
+L’enseignant peut faire l’appel pendant 1h30 à partir de l’heure de début de la
+séance. Ensuite, seule l’administration peut corriger le pointage et ajouter un
+justificatif. Chaque utilisateur change son mot de passe dans « Mon mot de passe ».
 
 ### Chef de département
 Le chef conserve sa vue enseignant et peut créer, modifier, supprimer ou

@@ -35,7 +35,7 @@ export function ClassSessions() {
 
   return (
     <div>
-      <Link href="/classes" className="text-sm text-muted hover:text-ink">
+      <Link href="/classes" className="-my-2 inline-flex min-h-10 items-center text-sm text-muted hover:text-ink">
         ← Classes
       </Link>
       <h1 className="mt-3 text-2xl font-semibold">{name}</h1>

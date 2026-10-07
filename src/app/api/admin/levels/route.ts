@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { requireAdmin } from "@/lib/auth";
+import { requireAdmin, authFailure } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 
 const schema = z.object({
@@ -19,7 +19,9 @@ export async function GET() {
         orderBy: [{ active: "desc" }, { name: "asc" }],
       }),
     );
-  } catch {
+  } catch (error) {
+    const denied = authFailure(error);
+    if (denied) return denied;
     return NextResponse.json({ error: "Non autorisé" }, { status: 403 });
   }
 }
@@ -34,7 +36,9 @@ export async function POST(req: Request) {
       }),
       { status: 201 },
     );
-  } catch {
+  } catch (error) {
+    const denied = authFailure(error);
+    if (denied) return denied;
     return NextResponse.json(
       { error: "Code déjà utilisé ou données invalides" },
       { status: 400 },
@@ -59,7 +63,9 @@ export async function PATCH(req: Request) {
         },
       }),
     );
-  } catch {
+  } catch (error) {
+    const denied = authFailure(error);
+    if (denied) return denied;
     return NextResponse.json({ error: "Modification impossible" }, { status: 400 });
   }
 }
@@ -74,7 +80,9 @@ export async function DELETE(req: Request) {
       data: { active: false },
     });
     return NextResponse.json({ ok: true });
-  } catch {
+  } catch (error) {
+    const denied = authFailure(error);
+    if (denied) return denied;
     return NextResponse.json({ error: "Désactivation impossible" }, { status: 400 });
   }
 }

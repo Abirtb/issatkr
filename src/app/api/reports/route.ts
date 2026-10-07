@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
-import { requireSession } from "@/lib/auth";
+import { requireSession, authFailure } from "@/lib/auth";
 import { getAttendanceReport } from "@/lib/attendance";
 import { prisma } from "@/lib/db";
+import { throttleUser } from "@/lib/rate-limit";
 import { canAccessClass, classScope } from "@/lib/access";
 
 function dateParam(value: string | null, endOfDay = false) {
@@ -13,6 +14,8 @@ function dateParam(value: string | null, endOfDay = false) {
 export async function GET(req: Request) {
   try {
     const user = await requireSession();
+    const throttled = throttleUser(user.id, "search");
+    if (throttled) return throttled;
     const search = new URL(req.url).searchParams;
     const classId = search.get("classId") || undefined;
     const subjectId = search.get("subjectId") || undefined;
@@ -48,7 +51,9 @@ export async function GET(req: Request) {
         })
       : { rows: [], thresholds: [] };
     return NextResponse.json({ classes, subjects, levels, ...report });
-  } catch {
+  } catch (error) {
+    const denied = authFailure(error);
+    if (denied) return denied;
     return NextResponse.json({ error: "Non autorisé" }, { status: 401 });
   }
 }

@@ -1,0 +1,56 @@
+# ISSATKr production stack. See DEPLOYMENT.md.
+#
+#   docker compose build
+#   docker compose run --rm migrate          # apply database migrations
+#   docker compose up -d app
+#
+# Configuration: .env.production (never committed; template: .env.production.example).
+# The app listens on 127.0.0.1 only: Nginx on the host terminates HTTPS and proxies to it.
+# SQLite database, uploaded justificatifs and local backups live in the "issatkr-data" volume.
+name: issatkr
+
+x-hardening: &hardening
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "5"
+
+services:
+  migrate:
+    <<: *hardening
+    build:
+      context: .
+      target: tools
+    image: issatkr-tools:latest
+    env_file: .env.production
+    environment:
+      NODE_ENV: production
+    volumes:
+      - issatkr-data:/data
+    restart: "no"
+    profiles: ["jobs"]
+
+  app:
+    <<: *hardening
+    build:
+      context: .
+      target: runner
+    image: issatkr-app:latest
+    env_file: .env.production
+    environment:
+      NODE_ENV: production
+    volumes:
+      - issatkr-data:/data
+    ports:
+      # Loopback only: never reachable from the Internet without Nginx.
+      - "127.0.0.1:${APP_PORT:-3000}:3000"
+    restart: unless-stopped
+    stop_grace_period: 20s
+
+volumes:
+  issatkr-data:

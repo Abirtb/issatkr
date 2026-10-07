@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { requireAdmin } from "@/lib/auth";
+import { requireAdmin, authFailure } from "@/lib/auth";
 import { prisma } from "@/lib/db";
+import { audit } from "@/lib/security-log";
 import { recalculateAlertsForStudents } from "@/lib/alerts";
 import { sendPendingNotifications } from "@/lib/mail";
 
@@ -29,14 +30,16 @@ export async function GET() {
       }),
     ]);
     return NextResponse.json({ subjects, levels, thresholds });
-  } catch {
+  } catch (error) {
+    const denied = authFailure(error);
+    if (denied) return denied;
     return NextResponse.json({ error: "Non autorisé" }, { status: 403 });
   }
 }
 
 export async function PUT(req: Request) {
   try {
-    await requireAdmin();
+    const admin = await requireAdmin();
     const input = schema.parse(await req.json());
     const threshold = await prisma.absenceThreshold.upsert({
       where: {
@@ -59,15 +62,18 @@ export async function PUT(req: Request) {
     if (notifications.length) {
       await sendPendingNotifications(Math.min(notifications.length, 10));
     }
+    await audit(admin, "threshold.update", { type: "threshold", id: threshold.id }, { eliminationCount: threshold.eliminationCount }, req);
     return NextResponse.json(threshold);
-  } catch {
+  } catch (error) {
+    const denied = authFailure(error);
+    if (denied) return denied;
     return NextResponse.json({ error: "Seuil invalide" }, { status: 400 });
   }
 }
 
 export async function DELETE(req: Request) {
   try {
-    await requireAdmin();
+    const admin = await requireAdmin();
     const id = new URL(req.url).searchParams.get("id");
     if (!id) return NextResponse.json({ error: "ID requis" }, { status: 400 });
     const threshold = await prisma.absenceThreshold.findUnique({ where: { id } });
@@ -83,8 +89,11 @@ export async function DELETE(req: Request) {
       }),
       prisma.absenceThreshold.delete({ where: { id } }),
     ]);
+    await audit(admin, "threshold.delete", { type: "threshold", id: id }, undefined, req);
     return NextResponse.json({ ok: true });
-  } catch {
+  } catch (error) {
+    const denied = authFailure(error);
+    if (denied) return denied;
     return NextResponse.json({ error: "Suppression impossible" }, { status: 400 });
   }
 }

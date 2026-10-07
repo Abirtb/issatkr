@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { requireAdmin } from "@/lib/auth";
+import { requireAdmin, authFailure } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { sendNotification } from "@/lib/mail";
 
@@ -13,15 +13,18 @@ export async function GET(req: Request) {
           ? { status: status as "PENDING" | "SENDING" | "SENT" | "FAILED" }
           : undefined,
       include: {
-        student: { include: { class: true } },
-        subject: true,
-        level: true,
+        // Listing view: identity only, no CIN/phone/Arabic names.
+        student: { select: { id: true, firstName: true, lastName: true, matricule: true, class: { select: { name: true } } } },
+        subject: { select: { name: true } },
+        level: { select: { name: true } },
       },
       orderBy: { createdAt: "desc" },
       take: 200,
     });
     return NextResponse.json(notifications);
-  } catch {
+  } catch (error) {
+    const denied = authFailure(error);
+    if (denied) return denied;
     return NextResponse.json({ error: "Non autorisé" }, { status: 403 });
   }
 }
@@ -37,7 +40,9 @@ export async function POST(req: Request) {
     });
     const sent = await sendNotification(id);
     return NextResponse.json({ ok: sent });
-  } catch {
+  } catch (error) {
+    const denied = authFailure(error);
+    if (denied) return denied;
     return NextResponse.json({ error: "Relance impossible" }, { status: 400 });
   }
 }

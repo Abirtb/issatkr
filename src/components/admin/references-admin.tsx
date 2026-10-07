@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { useRevealOnOpen } from "@/lib/use-reveal";
 
 type ReferenceRow = {
   id: string;
@@ -25,6 +26,7 @@ function ReferenceSection({
   const [code, setCode] = useState("");
   const [name, setName] = useState("");
   const [editing, setEditing] = useState<ReferenceRow | null>(null);
+  const editForm = useRevealOnOpen<HTMLFormElement>(editing?.id);
   const [message, setMessage] = useState("");
 
   const load = useCallback(async () => {
@@ -85,14 +87,14 @@ function ReferenceSection({
           placeholder="Code"
           value={code}
           onChange={(event) => setCode(event.target.value)}
-          className="w-28"
+          className="w-full sm:w-28"
         />
         <Input
           required
           placeholder="Libellé"
           value={name}
           onChange={(event) => setName(event.target.value)}
-          className="min-w-52 flex-1"
+          className="min-w-0 flex-1 basis-40"
         />
         <Button type="submit">Ajouter</Button>
       </form>
@@ -111,7 +113,7 @@ function ReferenceSection({
             <button
               type="button"
               onClick={() => setEditing(row)}
-              className="text-sm text-navy hover:underline"
+              className="min-h-10 px-1 text-sm text-navy hover:underline"
             >
               Modifier
             </button>
@@ -119,7 +121,7 @@ function ReferenceSection({
               <button
                 type="button"
                 onClick={() => void deactivate(row.id)}
-                className="text-sm text-red-700 hover:underline"
+                className="min-h-10 px-1 text-sm text-red-700 hover:underline"
               >
                 Désactiver
               </button>
@@ -129,6 +131,7 @@ function ReferenceSection({
       </div>
       {editing ? (
         <form
+          ref={editForm}
           onSubmit={save}
           className="mt-3 grid gap-2 rounded-lg bg-surface-2 p-3"
         >

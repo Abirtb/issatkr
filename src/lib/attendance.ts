@@ -33,7 +33,15 @@ export async function getAttendanceReport(filters: AttendanceReportFilters) {
         ...(filters.levelId ? { levelId: filters.levelId } : {}),
       },
     },
-    include: { class: { include: { level: true } } },
+    // Reports reach teachers too: identity fields only, no CIN/e-mail/phone.
+    select: {
+      id: true,
+      matricule: true,
+      firstName: true,
+      lastName: true,
+      classId: true,
+      class: { include: { level: true } },
+    },
     orderBy: [{ lastName: "asc" }, { firstName: "asc" }],
   });
   const levelIds = [
