@@ -374,3 +374,136 @@ Then return the code to the matching commit (`git checkout <previous-commit>`) s
 - [ ] Host: automatic security updates (`unattended-upgrades`), Docker enabled at boot, server time synchronized (NTP; the attendance window depends on it).
 - [ ] Repository history: `prisma/dev.db` (test data, password hashes) removed with `scripts/purge-dev-db-from-history.sh` (prepares a rewritten mirror; the force-push is a manual, explicit step).
 - [ ] Decisions recorded for the open items in `SECURITY_AUDIT_REPORT.md`: two-factor authentication for admins, encryption of the disk and backups, and audit log retention.
+
+## 18. Alternative: without Docker (systemd)
+
+Use this when the server runs the app directly with Node.js and systemd. The rules are the same as with Docker:
+
+- run the **production build**, never `next dev`;
+- listen on **127.0.0.1** behind Nginx;
+- use a dedicated non-root user;
+- keep the data **outside the web root**;
+- use a production database created by `prisma migrate deploy`.
+
+Requires Node.js 22 LTS (`node --version`) on the server.
+
+### 18.1 Check the current installation first (read-only)
+
+```bash
+sudo systemctl cat issatkr | grep -E 'ExecStart|WorkingDirectory|EnvironmentFile|^User'   # how it runs today
+sudo grep -h DATABASE_URL /etc/systemd/system/issatkr.service CURRENT_APP_DIR/.env* 2>/dev/null  # which database file holds the data
+node -e "console.log(require('CURRENT_APP_DIR/node_modules/next/package.json').version)"   # must be 16.3.8 or later
+git -C CURRENT_APP_DIR log --oneline -1                                                     # which commit is deployed
+sudo ss -ltnp | grep ':3000'          # 0.0.0.0:3000 = reachable from the Internet if the firewall allows it
+grep -rn "root /var/www/html" /etc/nginx/sites-enabled/   # is the app folder inside a web root Nginx serves?
+```
+
+**If the application folder is under a directory Nginx serves as static files** (for example `/var/www/html`), files such as `.env*` or `prisma/*.db` may be downloadable. Test from outside:
+
+```bash
+curl -s -o /dev/null -w "%{http_code}\n" http://SERVER_IP/issatkr/package.json
+```
+
+Anything other than 404 means the folder is exposed: move it now (§18.2) and rotate the secrets in it.
+
+**Keep the existing data.** If the current database (found above) already holds real attendance, back it up **before** changing anything:
+
+```bash
+sudo systemctl stop issatkr
+sudo cp -p CURRENT_DATABASE_FILE /root/issatkr-before-migration-$(date +%F).db
+```
+
+### 18.2 Install
+
+```bash
+# Dedicated user and directories: code in /opt (read-only for the service), data in /var/lib
+sudo useradd --system --home /var/lib/issatkr --shell /usr/sbin/nologin issatkr
+sudo mkdir -p /opt/issatkr /var/lib/issatkr/uploads /var/lib/issatkr/backups
+sudo chown "$USER" /opt/issatkr
+git clone github-issatkr:Abirtb/issatkr.git /opt/issatkr && cd /opt/issatkr   # deploy key: §6
+git checkout production-readiness        # until it is merged into main
+
+cp .env.production.example .env.production && chmod 600 .env.production
+#   DATABASE_URL=file:/var/lib/issatkr/issatkr.db
+#   UPLOAD_DIR=/var/lib/issatkr/uploads
+#   BACKUP_DIR=/var/lib/issatkr/backups
+#   AUTH_SECRET / CRON_SECRET / SMTP_*: see §3
+nano .env.production
+
+# Production build (never `npm run dev`)
+npm ci
+npm run build
+cp -r public .next/standalone/ && cp -r .next/static .next/standalone/.next/
+mkdir -p .next/standalone/.next/cache
+```
+
+### 18.3 Database
+
+Every Prisma or script command needs the production variables. `npx prisma` reads only `.env`, which does not exist here; that is what causes `Environment variable not found: DATABASE_URL`. Run such commands through `scripts/as-service.sh`: it loads `.env.production` and runs the command as the `issatkr` user, so files it creates belong to the service.
+
+Then do **one** of the following:
+
+- **Existing real data:** copy the backup from §18.1, then bring its schema up to date.
+
+  ```bash
+  sudo cp -p /root/issatkr-before-migration-YYYY-MM-DD.db /var/lib/issatkr/issatkr.db
+  sudo chown -R issatkr:issatkr /var/lib/issatkr && sudo chmod 700 /var/lib/issatkr
+  sudo bash scripts/as-service.sh npx prisma migrate deploy
+  ```
+
+- **New, empty production database** (the old one held only demo or test data):
+
+  ```bash
+  sudo chown -R issatkr:issatkr /var/lib/issatkr && sudo chmod 700 /var/lib/issatkr
+  sudo bash scripts/as-service.sh npx prisma migrate deploy
+  sudo bash scripts/as-service.sh node scripts/create-admin.mjs --email ADMIN_EMAIL --name "ADMIN_NAME"
+  ```
+
+Notes:
+
+- The app **refuses to start** when `DATABASE_URL` contains `dev.db`, `test` or `seed`. Copy real data to `/var/lib/issatkr/issatkr.db` rather than pointing at an old `dev.db`.
+- If that copied database still contains demo accounts, deactivate them on the **Utilisateurs** page.
+- Check the result: `sudo bash scripts/as-service.sh npx prisma migrate status`, then `sudo bash scripts/as-service.sh node scripts/db-verify.mjs`.
+
+### 18.4 Service
+
+```bash
+# Code stays owned by the deploying account (read-only for the service); only the cache is writable
+sudo chown -R issatkr:issatkr /opt/issatkr/.next/standalone/.next/cache
+sudo chown root:issatkr /opt/issatkr/.env.production && sudo chmod 640 /opt/issatkr/.env.production
+sudo cp deploy/systemd/issatkr.service /etc/systemd/system/issatkr.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now issatkr
+sudo systemctl restart issatkr
+sudo systemctl status issatkr --no-pager     # must show: node server.js (not "next dev")
+curl -s http://127.0.0.1:3000/health         # {"status":"ok"}
+sudo ss -ltnp | grep ':3000'                 # must show 127.0.0.1:3000, not 0.0.0.0:3000
+```
+
+Logs: `journalctl -u issatkr -f`. A configuration problem shows `[config] error: …` and the service stops.
+
+Then:
+
+- Configure Nginx and HTTPS as in §7–9; the proxy target is the same `127.0.0.1:3000`.
+- Schedule the notification retries in root's crontab:
+
+  ```
+  */15 * * * * cd /opt/issatkr && bash scripts/cron-notifications.sh
+  ```
+
+- **Remove the old copy** from `/var/www/html` once the new service works.
+
+### 18.5 Update, backup, rollback (systemd)
+
+```bash
+cd /opt/issatkr
+sudo bash scripts/as-service.sh node scripts/db-backup.mjs
+git pull --ff-only && npm ci && npm run build
+cp -r public .next/standalone/ && cp -r .next/static .next/standalone/.next/ && mkdir -p .next/standalone/.next/cache
+sudo chown -R issatkr:issatkr .next/standalone/.next/cache
+sudo bash scripts/as-service.sh npx prisma migrate deploy
+sudo systemctl restart issatkr && curl -s http://127.0.0.1:3000/health
+```
+
+- **Rollback:** `git checkout <previous commit>`, rebuild with the same commands, and restore the backup taken just before the update if a migration was applied (stop the service, copy the backup over `/var/lib/issatkr/issatkr.db`, start it).
+- **Nightly backup:** add it to root's crontab with the same `db-backup.mjs` command, and copy `/var/lib/issatkr/backups` off the server (§13).
