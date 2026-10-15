@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { csvRow } from "@/lib/csv";
+import { useRevealOnOpen } from "@/lib/use-reveal";
 
 type Role = "ADMIN" | "DEPARTMENT_HEAD" | "PROF";
 type UserRow = {
@@ -11,8 +13,16 @@ type UserRow = {
   email: string;
   role: Role;
   active: boolean;
+  invitation: "pending" | "expired" | null;
   _count: { taughtSessions: number };
 };
+
+// Link returned by the API only when it could not be e-mailed.
+type PendingLink = { name: string; email: string; link: string; expiresAt: string };
+type Delivery = { emailed: boolean; expiresAt: string; link?: string };
+
+const formatDate = (iso: string) =>
+  new Date(iso).toLocaleString("fr-FR", { dateStyle: "medium", timeStyle: "short" });
 
 const roleLabels: Record<Role, string> = {
   ADMIN: "Administration",
@@ -32,6 +42,60 @@ export function AdminUsers() {
     (UserRow & { password?: string }) | null
   >(null);
   const [message, setMessage] = useState("");
+  const editForm = useRevealOnOpen<HTMLFormElement>(editing?.id);
+  const [importing, setImporting] = useState(false);
+  const [links, setLinks] = useState<PendingLink[]>([]);
+
+  // E-mailed → just say so; not e-mailed (SMTP off/failed) → keep the link to hand over.
+  function keepUndelivered(person: { name: string; email: string }, delivery: Delivery) {
+    if (delivery.emailed || !delivery.link) return;
+    const link = delivery.link;
+    setLinks((current) => [
+      ...current.filter((item) => item.email !== person.email),
+      { ...person, link, expiresAt: delivery.expiresAt },
+    ]);
+  }
+
+  async function sendLink(user: UserRow) {
+    if (
+      !window.confirm(
+        `Envoyer un lien à ${user.name} pour choisir son mot de passe ?\nUn lien envoyé auparavant ne fonctionnera plus.`,
+      )
+    ) {
+      return;
+    }
+    const response = await fetch("/api/admin/users/invite", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: user.id }),
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      setMessage(data.error ?? "Envoi impossible");
+      return;
+    }
+    keepUndelivered(user, data);
+    setMessage(
+      data.emailed
+        ? `Lien envoyé par e-mail à ${user.email} (valable jusqu’au ${formatDate(data.expiresAt)}).`
+        : `E-mail non envoyé (SMTP non configuré ou indisponible) : transmettez le lien ci-dessous à ${user.name}.`,
+    );
+    await load();
+  }
+
+  function downloadLinks() {
+    const csv = [
+      "nom;email;lien;valable_jusqu_au",
+      ...links.map((row) => csvRow([row.name, row.email, row.link, formatDate(row.expiresAt)])),
+    ].join("\r\n");
+    const bom = String.fromCharCode(0xfeff);
+    const url = URL.createObjectURL(new Blob([bom + csv], { type: "text/csv;charset=utf-8" }));
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = "liens-activation.csv";
+    anchor.click();
+    URL.revokeObjectURL(url);
+  }
 
   const load = useCallback(async () => {
     const response = await fetch("/api/admin/users");
@@ -51,11 +115,22 @@ export function AdminUsers() {
       body: JSON.stringify(form),
     });
     const data = await response.json();
-    setMessage(response.ok ? "Utilisateur créé" : data.error);
-    if (response.ok) {
-      setForm({ name: "", email: "", password: "", role: "PROF" });
-      await load();
+    if (!response.ok) {
+      setMessage(data.error);
+      return;
     }
+    if (data.invitation) {
+      keepUndelivered(data.user, data.invitation);
+      setMessage(
+        data.invitation.emailed
+          ? `Compte créé. Invitation envoyée à ${data.user.email} (valable jusqu’au ${formatDate(data.invitation.expiresAt)}).`
+          : `Compte créé, mais l’e-mail n’a pas pu être envoyé : transmettez le lien ci-dessous à ${data.user.name}.`,
+      );
+    } else {
+      setMessage("Utilisateur créé avec le mot de passe saisi.");
+    }
+    setForm({ name: "", email: "", password: "", role: "PROF" });
+    await load();
   }
 
   async function save(event: React.FormEvent) {
@@ -84,12 +159,72 @@ export function AdminUsers() {
     if (response.ok) await load();
   }
 
+  async function importTeachers(file: File) {
+    setImporting(true);
+    setMessage("");
+    const body = new FormData();
+    body.set("file", file);
+    const response = await fetch("/api/admin/users/import", {
+      method: "POST",
+      body,
+    });
+    const data = await response.json();
+    setImporting(false);
+    if (!response.ok) {
+      setMessage(data.error);
+      return;
+    }
+    const invitations: (Delivery & { name: string; email: string })[] = data.invitations ?? [];
+    for (const invitation of invitations) keepUndelivered(invitation, invitation);
+    const emailed = invitations.filter((invitation) => invitation.emailed).length;
+    const notEmailed = invitations.length - emailed;
+    setMessage(
+      [
+        `${data.created} comptes créés, ${data.updated} mis à jour.`,
+        invitations.length ? `${emailed} invitation(s) envoyée(s) par e-mail.` : "",
+        notEmailed ? `${notEmailed} lien(s) à transmettre vous-même (liste ci-dessous).` : "",
+        ...data.errors,
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    );
+    await load();
+  }
+
   return (
     <div>
       <h1 className="text-2xl font-semibold">Utilisateurs et accès</h1>
       <p className="mt-1 text-sm text-muted">
         Administration, chefs de département et enseignants.
       </p>
+
+      <div className="surface-card mt-6 rounded-xl border-l-4 border-l-gold p-4">
+        <p className="font-semibold">Importer des enseignants (CSV / Excel)</p>
+        <p className="mt-1 text-sm text-muted">
+          Colonnes : nom, prenom (ou nom_complet), email. Facultatif :
+          mot_de_passe, role (enseignant, chef, admin). Les comptes existants
+          sont mis à jour. Sans mot de passe, chaque nouvel enseignant reçoit
+          par e-mail un lien d’activation pour choisir le sien.
+        </p>
+        <div className="mt-3 flex flex-wrap gap-2">
+          <label className={importing ? "pointer-events-none opacity-60" : "cursor-pointer"}>
+            <span className="inline-flex h-10 items-center rounded-lg bg-gold px-4 text-sm font-medium text-navy-deep">
+              {importing ? "Import en cours…" : "Choisir un fichier CSV / XLSX"}
+            </span>
+            <input
+              type="file"
+              accept=".csv,.xls,.xlsx"
+              className="hidden"
+              disabled={importing}
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                if (file) void importTeachers(file);
+                event.target.value = "";
+              }}
+            />
+          </label>
+        </div>
+      </div>
 
       <form
         onSubmit={create}
@@ -109,10 +244,10 @@ export function AdminUsers() {
           onChange={(event) => setForm({ ...form, email: event.target.value })}
         />
         <Input
-          required
           minLength={8}
           type="password"
-          placeholder="Mot de passe initial"
+          autoComplete="new-password"
+          placeholder="Mot de passe (facultatif)"
           value={form.password}
           onChange={(event) =>
             setForm({ ...form, password: event.target.value })
@@ -131,12 +266,54 @@ export function AdminUsers() {
             </option>
           ))}
         </select>
+        <p className="text-xs text-muted sm:col-span-2">
+          Laissez le mot de passe vide (recommandé) : la personne reçoit par
+          e-mail un lien valable 72 h pour choisir elle-même son mot de passe.
+        </p>
         <Button type="submit" className="sm:col-span-2">
-          Ajouter l’utilisateur
+          {form.password ? "Ajouter l’utilisateur" : "Ajouter et envoyer l’invitation"}
         </Button>
       </form>
 
-      {message ? <p className="mt-3 text-sm text-gold">{message}</p> : null}
+      {message ? (
+        <p className="mt-3 whitespace-pre-line text-sm text-gold">{message}</p>
+      ) : null}
+
+      {links.length ? (
+        <div className="surface-card mt-4 rounded-xl border-l-4 border-l-gold p-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="font-semibold">Liens à transmettre ({links.length})</p>
+            <div className="flex gap-2">
+              <Button size="sm" variant="secondary" onClick={downloadLinks}>
+                Télécharger (CSV)
+              </Button>
+              <Button size="sm" variant="secondary" onClick={() => setLinks([])}>
+                Effacer
+              </Button>
+            </div>
+          </div>
+          <p className="mt-1 text-xs text-muted">
+            L’e-mail n’a pas pu être envoyé. Chaque lien ouvre le compte : ne le
+            donnez qu’à la personne concernée, et supprimez le fichier après usage.
+          </p>
+          <ul className="mt-3 space-y-2">
+            {links.map((item) => (
+              <li key={item.email} className="rounded-lg bg-surface-2 p-3 text-sm">
+                <p className="font-medium">
+                  {item.name} <span className="font-normal text-muted">· {item.email}</span>
+                </p>
+                <div className="mt-2 flex gap-2">
+                  <Input readOnly value={item.link} onFocus={(event) => event.target.select()} className="font-mono text-xs" />
+                  <Button size="sm" variant="secondary" onClick={() => void navigator.clipboard.writeText(item.link)}>
+                    Copier
+                  </Button>
+                </div>
+                <p className="mt-1 text-xs text-muted">Valable jusqu’au {formatDate(item.expiresAt)}</p>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
 
       <div className="mt-6 overflow-x-auto rounded-xl border border-border">
         <table className="w-full min-w-[680px] text-sm">
@@ -159,21 +336,36 @@ export function AdminUsers() {
                 <td className="px-4 py-3">{roleLabels[user.role]}</td>
                 <td className="px-4 py-3">{user._count.taughtSessions}</td>
                 <td className="px-4 py-3">
-                  {user.active ? "Actif" : "Désactivé"}
+                  {!user.active
+                    ? "Désactivé"
+                    : user.invitation === "pending"
+                      ? "Invitation envoyée"
+                      : user.invitation === "expired"
+                        ? "Invitation expirée"
+                        : "Actif"}
                 </td>
-                <td className="space-x-3 px-4 py-3 text-right">
+                <td className="space-x-2 whitespace-nowrap px-4 py-2 text-right">
                   <button
                     type="button"
                     onClick={() => setEditing({ ...user, password: "" })}
-                    className="text-navy hover:underline"
+                    className="min-h-9 px-1 text-navy hover:underline"
                   >
                     Modifier
                   </button>
                   {user.active ? (
                     <button
                       type="button"
+                      onClick={() => void sendLink(user)}
+                      className="min-h-9 px-1 text-navy hover:underline"
+                    >
+                      {user.invitation ? "Renvoyer l’invitation" : "Envoyer un lien"}
+                    </button>
+                  ) : null}
+                  {user.active ? (
+                    <button
+                      type="button"
                       onClick={() => void deactivate(user.id)}
-                      className="text-red-700 hover:underline"
+                      className="min-h-9 px-1 text-red-700 hover:underline"
                     >
                       Désactiver
                     </button>
@@ -187,6 +379,7 @@ export function AdminUsers() {
 
       {editing ? (
         <form
+          ref={editForm}
           onSubmit={save}
           className="surface-card mt-4 grid gap-3 rounded-xl p-4 sm:grid-cols-2"
         >

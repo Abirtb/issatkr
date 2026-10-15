@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { useRevealOnOpen } from "@/lib/use-reveal";
 
 type ReferenceRow = {
   id: string;
@@ -25,7 +26,9 @@ function ReferenceSection({
   const [code, setCode] = useState("");
   const [name, setName] = useState("");
   const [editing, setEditing] = useState<ReferenceRow | null>(null);
+  const editForm = useRevealOnOpen<HTMLFormElement>(editing?.id);
   const [message, setMessage] = useState("");
+  const [importing, setImporting] = useState(false);
 
   const load = useCallback(async () => {
     const response = await fetch(endpoint);
@@ -69,6 +72,27 @@ function ReferenceSection({
     }
   }
 
+  async function importFile(file: File) {
+    setImporting(true);
+    setMessage("");
+    const body = new FormData();
+    body.set("file", file);
+    const response = await fetch(`${endpoint}/import`, { method: "POST", body });
+    const data = await response.json();
+    setImporting(false);
+    if (!response.ok) {
+      setMessage(data.error ?? "Import impossible");
+      return;
+    }
+    setMessage(
+      [
+        `Import : ${data.created} ajouté(s), ${data.updated} mis à jour${data.errorCount ? `, ${data.errorCount} ligne(s) ignorée(s)` : ""}`,
+        ...data.errors,
+      ].join("\n"),
+    );
+    await load();
+  }
+
   async function deactivate(id: string) {
     const response = await fetch(`${endpoint}?id=${id}`, { method: "DELETE" });
     const data = await response.json();
@@ -85,18 +109,39 @@ function ReferenceSection({
           placeholder="Code"
           value={code}
           onChange={(event) => setCode(event.target.value)}
-          className="w-28"
+          className="w-full sm:w-28"
         />
         <Input
           required
           placeholder="Libellé"
           value={name}
           onChange={(event) => setName(event.target.value)}
-          className="min-w-52 flex-1"
+          className="min-w-0 flex-1 basis-40"
         />
         <Button type="submit">Ajouter</Button>
       </form>
-      {message ? <p className="mt-2 text-xs text-muted">{message}</p> : null}
+      <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1">
+        <label className={importing ? "pointer-events-none opacity-60" : "cursor-pointer"}>
+          <span className="inline-flex h-10 items-center rounded-lg border border-border px-3 text-sm hover:bg-surface-2">
+            {importing ? "Import en cours…" : "Importer CSV / Excel"}
+          </span>
+          <input
+            type="file"
+            accept=".csv,.xlsx,.xls"
+            className="hidden"
+            disabled={importing}
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              if (file) void importFile(file);
+              event.target.value = "";
+            }}
+          />
+        </label>
+        <span className="text-xs text-muted">Colonnes : code, libellé</span>
+      </div>
+      {message ? (
+        <p className="mt-2 whitespace-pre-line text-xs text-muted">{message}</p>
+      ) : null}
       <div className="mt-4 divide-y divide-border">
         {rows.map((row) => (
           <div key={row.id} className="flex items-center gap-3 py-3">
@@ -111,7 +156,7 @@ function ReferenceSection({
             <button
               type="button"
               onClick={() => setEditing(row)}
-              className="text-sm text-navy hover:underline"
+              className="min-h-10 px-1 text-sm text-navy hover:underline"
             >
               Modifier
             </button>
@@ -119,7 +164,7 @@ function ReferenceSection({
               <button
                 type="button"
                 onClick={() => void deactivate(row.id)}
-                className="text-sm text-red-700 hover:underline"
+                className="min-h-10 px-1 text-sm text-red-700 hover:underline"
               >
                 Désactiver
               </button>
@@ -129,6 +174,7 @@ function ReferenceSection({
       </div>
       {editing ? (
         <form
+          ref={editForm}
           onSubmit={save}
           className="mt-3 grid gap-2 rounded-lg bg-surface-2 p-3"
         >

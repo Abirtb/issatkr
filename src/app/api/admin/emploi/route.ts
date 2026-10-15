@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
-import { requireScheduleManager } from "@/lib/auth";
+import { requireScheduleManager, authFailure } from "@/lib/auth";
 import { prisma } from "@/lib/db";
+import { audit, logServerError } from "@/lib/security-log";
 import {
   MAX_IMPORT_BYTES,
   MAX_IMPORT_ROWS,
@@ -11,7 +12,7 @@ import {
 
 export async function POST(req: Request) {
   try {
-    await requireScheduleManager();
+    const actor = await requireScheduleManager();
     const form = await req.formData();
     const file = form.get("file");
     if (!(file instanceof File)) {
@@ -158,6 +159,7 @@ export async function POST(req: Request) {
       created++;
     }
 
+    await audit(actor, "schedule.import", { type: "workbook" }, { created, updated, skipped }, req);
     return NextResponse.json({
       created,
       updated,
@@ -165,7 +167,9 @@ export async function POST(req: Request) {
       errors: errors.slice(0, 10),
     });
   } catch (e) {
-    console.error(e);
+    const denied = authFailure(e);
+    if (denied) return denied;
+    logServerError("emploi.import", e);
     return NextResponse.json({ error: "Import échoué" }, { status: 500 });
   }
 }

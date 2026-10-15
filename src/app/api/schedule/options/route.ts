@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { requireScheduleManager } from "@/lib/auth";
+import { requireScheduleManager, authFailure } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 
 export async function GET() {
@@ -24,7 +24,9 @@ export async function GET() {
       }),
     ]);
     return NextResponse.json({ classes, professors, subjects });
-  } catch {
+  } catch (error) {
+    const denied = authFailure(error);
+    if (denied) return denied;
     return NextResponse.json({ error: "Non autorisé" }, { status: 403 });
   }
 }

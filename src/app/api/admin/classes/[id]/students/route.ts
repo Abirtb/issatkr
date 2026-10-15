@@ -1,7 +1,10 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { requireAdmin } from "@/lib/auth";
+import { requireAdmin, authFailure } from "@/lib/auth";
+import { cinField, phoneField } from "@/lib/student-fields";
 import { prisma } from "@/lib/db";
+import { throttleUser } from "@/lib/rate-limit";
+import { audit, changedFields, logServerError } from "@/lib/security-log";
 import {
   MAX_IMPORT_BYTES,
   MAX_IMPORT_ROWS,
@@ -12,7 +15,7 @@ import {
 const studentSchema = z.object({
   studentId: z.string().min(1).optional(),
   matricule: z.string().trim().min(1).max(50),
-  cin: z.string().trim().max(20).nullable().optional(),
+  cin: cinField,
   firstName: z.string().trim().min(1).max(100),
   lastName: z.string().trim().min(1).max(100),
   firstNameAr: z.string().trim().max(100).nullable().optional(),
@@ -20,7 +23,8 @@ const studentSchema = z.object({
   email: z
     .union([z.string().trim().email().max(200), z.literal(""), z.null()])
     .optional(),
-  phone: z.string().trim().max(30).nullable().optional(),
+  phone: phoneField,
+  classId: z.string().min(1).optional(),
 });
 
 export async function GET(
@@ -35,7 +39,9 @@ export async function GET(
       orderBy: [{ lastName: "asc" }, { firstName: "asc" }],
     });
     return NextResponse.json(students);
-  } catch {
+  } catch (error) {
+    const denied = authFailure(error);
+    if (denied) return denied;
     return NextResponse.json({ error: "Non autorisé" }, { status: 403 });
   }
 }
@@ -45,7 +51,9 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
-    await requireAdmin();
+    const admin = await requireAdmin();
+    const throttled = throttleUser(admin.id, "import");
+    if (throttled) return throttled;
     const { id } = await params;
     const cls = await prisma.class.findUnique({ where: { id } });
     if (!cls) return NextResponse.json({ error: "Classe introuvable" }, { status: 404 });
@@ -65,6 +73,7 @@ export async function POST(
           classId: id,
         },
       });
+      await audit(admin, "student.create", { type: "student", id: created.id }, { classId: id }, req);
       return NextResponse.json(created, { status: 201 });
     }
 
@@ -145,6 +154,10 @@ export async function POST(
       ),
     ]);
 
+    await audit(admin, "students.import", { type: "class", id }, {
+      rows: uniqueStudents.length,
+      replace,
+    }, req);
     return NextResponse.json({
       created: uniqueStudents.length - existingSet.size,
       updated: existingSet.size,
@@ -152,7 +165,9 @@ export async function POST(
       duplicatesIgnored: students.length - uniqueStudents.length,
     });
   } catch (e) {
-    console.error(e);
+    const denied = authFailure(e);
+    if (denied) return denied;
+    logServerError("students.import", e);
     return NextResponse.json({ error: "Import échoué" }, { status: 500 });
   }
 }
@@ -162,7 +177,7 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
-    await requireAdmin();
+    const admin = await requireAdmin();
     const { id } = await params;
     const student = studentSchema.parse(await req.json());
     if (!student.studentId) {
@@ -170,14 +185,21 @@ export async function PATCH(
     }
     const existing = await prisma.student.findFirst({
       where: { id: student.studentId, classId: id },
-      select: { id: true },
     });
     if (!existing) {
       return NextResponse.json({ error: "Étudiant introuvable" }, { status: 404 });
     }
+    const targetClassId = student.classId ?? id;
+    if (
+      targetClassId !== id &&
+      !(await prisma.class.findUnique({ where: { id: targetClassId } }))
+    ) {
+      return NextResponse.json({ error: "Classe introuvable" }, { status: 404 });
+    }
     const updated = await prisma.student.update({
       where: { id: student.studentId },
       data: {
+        classId: targetClassId,
         matricule: student.matricule,
         cin: student.cin || null,
         firstName: student.firstName,
@@ -188,8 +210,14 @@ export async function PATCH(
         phone: student.phone || null,
       },
     });
+    // Field names only (e.g. "cin"), never the old or new values.
+    await audit(admin, "student.update", { type: "student", id: updated.id }, {
+      fields: changedFields(existing, updated),
+    }, req);
     return NextResponse.json(updated);
-  } catch {
+  } catch (error) {
+    const denied = authFailure(error);
+    if (denied) return denied;
     return NextResponse.json(
       { error: "Données invalides ou matricule déjà utilisé" },
       { status: 400 },
@@ -202,7 +230,7 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
-    await requireAdmin();
+    const admin = await requireAdmin();
     const { id } = await params;
     const studentId = new URL(req.url).searchParams.get("studentId");
     if (!studentId) {
@@ -215,8 +243,11 @@ export async function DELETE(
     if (result.count === 0) {
       return NextResponse.json({ error: "Étudiant introuvable" }, { status: 404 });
     }
+    await audit(admin, "student.deactivate", { type: "student", id: studentId }, { classId: id }, req);
     return NextResponse.json({ ok: true });
-  } catch {
+  } catch (error) {
+    const denied = authFailure(error);
+    if (denied) return denied;
     return NextResponse.json({ error: "Suppression impossible" }, { status: 400 });
   }
 }

@@ -144,8 +144,26 @@ export function parseEnrollmentWorkbook(buffer: ArrayBuffer): EnrollmentGroup[] 
   });
 }
 
+// CSV files arrive as UTF-8 (with or without BOM) or as Windows-1252 when saved
+// by French Excel. Decode them explicitly so accents (é, è, ç) survive; binary
+// workbooks (XLSX = zip "PK", XLS = OLE D0 CF) are read as-is.
+function readSpreadsheet(buffer: ArrayBuffer) {
+  const bytes = new Uint8Array(buffer);
+  const isZip = bytes[0] === 0x50 && bytes[1] === 0x4b;
+  const isOle = bytes[0] === 0xd0 && bytes[1] === 0xcf;
+  if (isZip || isOle) return XLSX.read(buffer, { type: "array", cellDates: true });
+  let text: string;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    text = new TextDecoder("windows-1252").decode(bytes);
+  }
+  const withoutBom = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
+  return XLSX.read(withoutBom, { type: "string", cellDates: true });
+}
+
 export function parseWorkbook(buffer: ArrayBuffer): Row[] {
-  const wb = XLSX.read(buffer, { type: "array", cellDates: true });
+  const wb = readSpreadsheet(buffer);
   const sheet = wb.Sheets[wb.SheetNames[0]];
   if (!sheet) return [];
   return XLSX.utils
@@ -156,7 +174,8 @@ export function parseWorkbook(buffer: ArrayBuffer): Row[] {
 export function parseStudentsRows(rows: Row[]) {
   return rows
     .map((row) => ({
-      matricule: pick(row, ["matricule", "numero", "num_inscription", "id", "cin"]),
+      // Never fall back to the CIN: the matricule is shown to every teacher.
+      matricule: pick(row, ["matricule", "numero", "num_inscription", "id"]),
       firstName: pick(row, ["prenom", "firstname", "first_name", "nom_prenom"]),
       lastName: pick(row, ["nom", "lastname", "last_name", "nom_famille"]),
     }))
@@ -209,4 +228,99 @@ export function parseDate(raw: string): Date | null {
   }
   const d = new Date(s);
   return Number.isNaN(d.getTime()) ? null : d;
+}
+
+// CINs lose leading zeros when Excel stores them as numbers.
+export function normalizeCin(value: string) {
+  const compact = value.trim().toUpperCase().replace(/[\s.\-]/g, "");
+  return /^\d+$/.test(compact) ? compact.replace(/^0+/, "") : compact;
+}
+
+export type CinEmailRow = { cin: string; email: string; name: string };
+
+// Reads every sheet looking for a header row with a CIN column and an e-mail column.
+export function parseCinEmailWorkbook(buffer: ArrayBuffer): CinEmailRow[] {
+  const workbook = readSpreadsheet(buffer);
+  const result: CinEmailRow[] = [];
+  for (const sheetName of workbook.SheetNames) {
+    const sheet = workbook.Sheets[sheetName];
+    if (!sheet) continue;
+    const rows = XLSX.utils.sheet_to_json<unknown[]>(sheet, {
+      header: 1,
+      defval: "",
+      blankrows: false,
+      raw: false,
+    });
+    const headerIndex = rows.findIndex(
+      (row) =>
+        row.some((cell) => norm(text(cell)) === "cin") &&
+        row.some((cell) => norm(text(cell)).includes("mail")),
+    );
+    if (headerIndex < 0) continue;
+    const headers = rows[headerIndex].map((cell) => norm(text(cell)));
+    const cinColumn = headers.indexOf("cin");
+    const emailColumn = headers.findIndex((header) => header.includes("mail"));
+    const nameColumns = headers
+      .map((header, index) => ({ header, index }))
+      .filter(({ header }) => /^(nom|prenom|name)/.test(header))
+      .map(({ index }) => index);
+    for (const row of rows.slice(headerIndex + 1)) {
+      const cin = text(row[cinColumn]);
+      const email = text(row[emailColumn]).toLowerCase();
+      if (!cin || !email) continue;
+      result.push({
+        cin,
+        email,
+        name: nameColumns.map((index) => text(row[index])).filter(Boolean).join(" "),
+      });
+      if (result.length > MAX_IMPORT_ROWS) return result;
+    }
+  }
+  return result;
+}
+
+export type TeacherRow = {
+  name: string;
+  email: string;
+  password: string;
+  role: "ADMIN" | "DEPARTMENT_HEAD" | "PROF" | null;
+};
+
+function parseRole(raw: string): TeacherRow["role"] {
+  const value = norm(raw);
+  if (!value) return null;
+  if (value.startsWith("admin")) return "ADMIN";
+  if (value.includes("chef") || value.includes("head")) return "DEPARTMENT_HEAD";
+  return "PROF";
+}
+
+export function parseTeacherRows(rows: Row[]): TeacherRow[] {
+  return rows
+    .map((row) => {
+      const fullName = pick(row, ["nom_complet", "nom_prenom", "name", "enseignant", "full_name"]);
+      const lastName = pick(row, ["nom", "last_name", "lastname"]);
+      const firstName = pick(row, ["prenom", "first_name", "firstname"]);
+      return {
+        name: fullName || [firstName, lastName].filter(Boolean).join(" "),
+        email: pick(row, ["email", "e-mail", "mail", "adresse_email"]).toLowerCase(),
+        password: pick(row, ["mot_de_passe", "password", "mdp"]),
+        role: parseRole(pick(row, ["role", "rôle", "fonction"])),
+      };
+    })
+    .filter((row) => row.email);
+}
+
+export type ReferenceRow = { line: number; code: string; name: string };
+
+// Subjects / levels: one row per item, columns "code" and "libellé" (or variants).
+// `line` is the spreadsheet line (header = 1) for error messages.
+export function parseReferenceRows(rows: Row[]): ReferenceRow[] {
+  return rows
+    .map((row, index) => ({
+      // SheetJS keeps the 0-based sheet row (header = 0) even when blank lines are skipped.
+      line: ((row as { __rowNum__?: number }).__rowNum__ ?? index + 1) + 1,
+      code: pick(row, ["code", "code_matiere", "code_niveau", "sigle", "abreviation"]),
+      name: pick(row, ["libelle", "nom", "name", "intitule", "designation", "matiere", "niveau"]),
+    }))
+    .filter((row) => row.code || row.name);
 }

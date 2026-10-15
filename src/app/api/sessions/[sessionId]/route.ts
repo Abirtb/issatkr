@@ -1,10 +1,15 @@
 import { NextResponse } from "next/server";
-import { requireSession } from "@/lib/auth";
+import { requireSession, authFailure } from "@/lib/auth";
 import { prisma } from "@/lib/db";
+import { audit, logServerError } from "@/lib/security-log";
 import { canAccessSession } from "@/lib/access";
 import { z } from "zod";
 import { recalculateAlertsForStudents } from "@/lib/alerts";
 import { sendPendingNotifications } from "@/lib/mail";
+import {
+  ATTENDANCE_WINDOW_MINUTES,
+  getAttendanceWindow,
+} from "@/lib/attendance-window";
 
 const marksSchema = z.object({
   marks: z
@@ -30,14 +35,15 @@ export async function GET(
     const session = await prisma.session.findUnique({
       where: { id: sessionId },
       include: {
-        class: true,
-        attendances: true,
+        class: { select: { id: true, name: true, code: true } },
+        attendances: { select: { studentId: true, present: true } },
       },
     });
     if (!session) return NextResponse.json({ error: "Introuvable" }, { status: 404 });
 
     const students = await prisma.student.findMany({
       where: { classId: session.classId, active: true },
+      select: { id: true, matricule: true, firstName: true, lastName: true },
       orderBy: [{ lastName: "asc" }, { firstName: "asc" }],
     });
 
@@ -47,8 +53,17 @@ export async function GET(
       attendance: map[s.id] ?? null,
     }));
 
-    return NextResponse.json({ session, rows });
-  } catch {
+    const window = getAttendanceWindow(session.date, session.startTime);
+    return NextResponse.json({
+      session,
+      rows,
+      window,
+      serverNow: new Date(),
+      bypassWindow: user.role === "ADMIN",
+    });
+  } catch (error) {
+    const denied = authFailure(error);
+    if (denied) return denied;
     return NextResponse.json({ error: "Non autorisé" }, { status: 401 });
   }
 }
@@ -72,16 +87,24 @@ export async function PUT(
 
     const session = await prisma.session.findUnique({
       where: { id: sessionId },
-      select: { classId: true, subjectId: true, finalizedAt: true },
+      select: { classId: true, subjectId: true, date: true, startTime: true },
     });
     if (!session) {
       return NextResponse.json({ error: "Introuvable" }, { status: 404 });
     }
-    if (session.finalizedAt && user.role !== "ADMIN") {
-      return NextResponse.json(
-        { error: "Séance déjà finalisée. Contactez l’administration." },
-        { status: 409 },
-      );
+    if (user.role !== "ADMIN") {
+      const window = getAttendanceWindow(session.date, session.startTime);
+      if (window?.state !== "open") {
+        return NextResponse.json(
+          {
+            error:
+              window?.state === "upcoming"
+                ? "L’appel n’est pas encore ouvert pour cette séance."
+                : `L’appel est fermé (${ATTENDANCE_WINDOW_MINUTES} min après le début de la séance). Contactez l’administration.`,
+          },
+          { status: 409 },
+        );
+      }
     }
 
     const uniqueStudentIds = [...new Set(marks.map((mark) => mark.studentId))];
@@ -134,9 +157,12 @@ export async function PUT(
       }
     }
 
+    await audit(user, "attendance.record", { type: "session", id: sessionId }, { marks: marks.length, absent: marks.filter((m) => !m.present).length }, req);
     return NextResponse.json({ ok: true, count: marks.length });
   } catch (e) {
-    console.error(e);
+    const denied = authFailure(e);
+    if (denied) return denied;
+    logServerError("sessions.save", e);
     return NextResponse.json({ error: "Enregistrement échoué" }, { status: 400 });
   }
 }

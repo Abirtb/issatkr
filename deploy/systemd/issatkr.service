@@ -1,0 +1,44 @@
+# ISSATKr — production service WITHOUT Docker (systemd). See DEPLOYMENT.md §18.
+# Install: sudo cp deploy/systemd/issatkr.service /etc/systemd/system/issatkr.service
+#          sudo systemctl daemon-reload && sudo systemctl enable --now issatkr
+#
+# Runs the PRODUCTION build (next build → .next/standalone/server.js), never `next dev`.
+# Listens on 127.0.0.1 only: Nginx terminates HTTPS and proxies to it.
+[Unit]
+Description=ISSATKr Presence (Next.js production server)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=issatkr
+Group=issatkr
+WorkingDirectory=/opt/issatkr/.next/standalone
+# Secrets and settings (mode 600, owned by root or issatkr). Never in this file.
+EnvironmentFile=/opt/issatkr/.env.production
+Environment=NODE_ENV=production
+Environment=HOSTNAME=127.0.0.1
+Environment=PORT=3000
+ExecStart=/usr/bin/node server.js
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+
+# Hardening: the service can only write its data directory and Next's image cache.
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/issatkr /opt/issatkr/.next/standalone/.next/cache
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

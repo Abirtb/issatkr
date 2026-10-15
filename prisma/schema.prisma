@@ -24,6 +24,11 @@ enum NotificationType {
   ELIMINATION
 }
 
+enum TokenPurpose {
+  INVITE
+  RESET
+}
+
 enum NotificationStatus {
   PENDING
   SENDING
@@ -38,9 +43,12 @@ model User {
   name                 String
   role                 Role         @default(PROF)
   active               Boolean      @default(true)
+  // Bumped on logout: every token issued before is rejected.
+  sessionVersion       Int          @default(0)
   createdAt            DateTime     @default(now())
   updatedAt            DateTime     @default(now()) @updatedAt
   taughtSessions       Session[]    @relation("SessionProfessor")
+  accountTokens        AccountToken[]
   attendanceAmendments Attendance[] @relation("AttendanceAmendments")
 }
 
@@ -140,6 +148,8 @@ model Attendance {
   sessionId     String
   present       Boolean  @default(true)
   justification String?
+  justificationFile     String?
+  justificationFileName String?
   amendedAt     DateTime?
   amendedById   String?
   createdAt     DateTime @default(now())
@@ -211,4 +221,37 @@ model NotificationLog {
 
   @@index([status, createdAt])
   @@index([studentId, subjectId])
+}
+
+// Who did what to which record. Never holds the sensitive values themselves.
+model AuditLog {
+  id         String   @id @default(cuid())
+  actorId    String?
+  actorRole  String?
+  action     String
+  targetType String?
+  targetId   String?
+  details    String?
+  ip         String?
+  createdAt  DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([actorId, createdAt])
+  @@index([targetType, targetId])
+}
+
+// One-time links to set a password (invitation or reset). Only a SHA-256 hash
+// of the token is stored; the token itself exists only in the link.
+model AccountToken {
+  id          String       @id @default(cuid())
+  userId      String
+  tokenHash   String       @unique
+  purpose     TokenPurpose
+  expiresAt   DateTime
+  usedAt      DateTime?
+  createdById String?
+  createdAt   DateTime     @default(now())
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }

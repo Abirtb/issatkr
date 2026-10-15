@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { requireScheduleManager } from "@/lib/auth";
+import { requireScheduleManager, authFailure } from "@/lib/auth";
 import { prisma } from "@/lib/db";
+import { audit } from "@/lib/security-log";
 
 const sessionSchema = z.object({
   id: z.string().min(1).optional(),
@@ -66,14 +67,16 @@ export async function GET(req: Request) {
       take: 500,
     });
     return NextResponse.json(sessions);
-  } catch {
+  } catch (error) {
+    const denied = authFailure(error);
+    if (denied) return denied;
     return NextResponse.json({ error: "Non autorisé" }, { status: 403 });
   }
 }
 
 export async function POST(req: Request) {
   try {
-    await requireScheduleManager();
+    const actor = await requireScheduleManager();
     const input = sessionSchema.parse(await req.json());
     const { subject } = await resolveReferences(input);
     const session = await prisma.session.create({
@@ -89,8 +92,16 @@ export async function POST(req: Request) {
         room: input.room || null,
       },
     });
+    // Actor = the logged-in user (never the request body); professorId = assigned teacher.
+    await audit(actor, "schedule.create", { type: "session", id: session.id }, {
+      classId: session.classId,
+      professorId: session.professorId,
+      selfAssigned: session.professorId === actor.id,
+    }, req);
     return NextResponse.json(session, { status: 201 });
   } catch (error) {
+    const denied = authFailure(error);
+    if (denied) return denied;
     const message =
       error instanceof z.ZodError
         ? error.issues[0]?.message
@@ -101,7 +112,7 @@ export async function POST(req: Request) {
 
 export async function PATCH(req: Request) {
   try {
-    await requireScheduleManager();
+    const actor = await requireScheduleManager();
     const input = sessionSchema.parse(await req.json());
     if (!input.id) {
       return NextResponse.json({ error: "ID requis" }, { status: 400 });
@@ -121,15 +132,22 @@ export async function PATCH(req: Request) {
         room: input.room || null,
       },
     });
+    await audit(actor, "schedule.update", { type: "session", id: session.id }, {
+      classId: session.classId,
+      professorId: session.professorId,
+      selfAssigned: session.professorId === actor.id,
+    }, req);
     return NextResponse.json(session);
-  } catch {
+  } catch (error) {
+    const denied = authFailure(error);
+    if (denied) return denied;
     return NextResponse.json({ error: "Modification impossible" }, { status: 400 });
   }
 }
 
 export async function DELETE(req: Request) {
   try {
-    await requireScheduleManager();
+    const actor = await requireScheduleManager();
     const id = new URL(req.url).searchParams.get("id");
     if (!id) return NextResponse.json({ error: "ID requis" }, { status: 400 });
     const attendanceCount = await prisma.attendance.count({
@@ -142,8 +160,11 @@ export async function DELETE(req: Request) {
       );
     }
     await prisma.session.delete({ where: { id } });
+    await audit(actor, "schedule.delete", { type: "session", id }, undefined, req);
     return NextResponse.json({ ok: true });
-  } catch {
+  } catch (error) {
+    const denied = authFailure(error);
+    if (denied) return denied;
     return NextResponse.json({ error: "Suppression impossible" }, { status: 400 });
   }
 }
