@@ -46,6 +46,9 @@ export type AuditAction =
   | "auth.login"
   | "auth.logout"
   | "auth.password_change"
+  | "auth.invitation_accept"
+  | "user.invite"
+  | "user.password_link"
   | "student.create"
   | "student.update"
   | "student.deactivate"
@@ -71,7 +74,9 @@ export type AuditAction =
   | "schedule.create"
   | "schedule.update"
   | "schedule.delete"
-  | "schedule.import";
+  | "schedule.import"
+  | "subjects.import"
+  | "levels.import";
 
 // Records who did what to which record. Never stores the sensitive values;
 // `details` keeps counts and changed field names only. Never throws.

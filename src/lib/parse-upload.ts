@@ -144,8 +144,26 @@ export function parseEnrollmentWorkbook(buffer: ArrayBuffer): EnrollmentGroup[] 
   });
 }
 
+// CSV files arrive as UTF-8 (with or without BOM) or as Windows-1252 when saved
+// by French Excel. Decode them explicitly so accents (é, è, ç) survive; binary
+// workbooks (XLSX = zip "PK", XLS = OLE D0 CF) are read as-is.
+function readSpreadsheet(buffer: ArrayBuffer) {
+  const bytes = new Uint8Array(buffer);
+  const isZip = bytes[0] === 0x50 && bytes[1] === 0x4b;
+  const isOle = bytes[0] === 0xd0 && bytes[1] === 0xcf;
+  if (isZip || isOle) return XLSX.read(buffer, { type: "array", cellDates: true });
+  let text: string;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    text = new TextDecoder("windows-1252").decode(bytes);
+  }
+  const withoutBom = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
+  return XLSX.read(withoutBom, { type: "string", cellDates: true });
+}
+
 export function parseWorkbook(buffer: ArrayBuffer): Row[] {
-  const wb = XLSX.read(buffer, { type: "array", cellDates: true });
+  const wb = readSpreadsheet(buffer);
   const sheet = wb.Sheets[wb.SheetNames[0]];
   if (!sheet) return [];
   return XLSX.utils
@@ -222,7 +240,7 @@ export type CinEmailRow = { cin: string; email: string; name: string };
 
 // Reads every sheet looking for a header row with a CIN column and an e-mail column.
 export function parseCinEmailWorkbook(buffer: ArrayBuffer): CinEmailRow[] {
-  const workbook = XLSX.read(buffer, { type: "array" });
+  const workbook = readSpreadsheet(buffer);
   const result: CinEmailRow[] = [];
   for (const sheetName of workbook.SheetNames) {
     const sheet = workbook.Sheets[sheetName];
@@ -290,4 +308,19 @@ export function parseTeacherRows(rows: Row[]): TeacherRow[] {
       };
     })
     .filter((row) => row.email);
+}
+
+export type ReferenceRow = { line: number; code: string; name: string };
+
+// Subjects / levels: one row per item, columns "code" and "libellé" (or variants).
+// `line` is the spreadsheet line (header = 1) for error messages.
+export function parseReferenceRows(rows: Row[]): ReferenceRow[] {
+  return rows
+    .map((row, index) => ({
+      // SheetJS keeps the 0-based sheet row (header = 0) even when blank lines are skipped.
+      line: ((row as { __rowNum__?: number }).__rowNum__ ?? index + 1) + 1,
+      code: pick(row, ["code", "code_matiere", "code_niveau", "sigle", "abreviation"]),
+      name: pick(row, ["libelle", "nom", "name", "intitule", "designation", "matiere", "niveau"]),
+    }))
+    .filter((row) => row.code || row.name);
 }

@@ -23,11 +23,15 @@ export function checkProductionConfig(env: NodeJS.ProcessEnv = process.env) {
 
   if (!env.UPLOAD_DIR) error("UPLOAD_DIR is required (persistent directory for justificatifs)");
 
+  const appUrl = (env.APP_URL ?? "").replace(/\/+$/, "");
+  if (!appUrl.startsWith("https://") || appUrl.slice("https://".length).includes("/")) {
+    warning("APP_URL is not set to the public https:// address: invitation e-mails will use the request address");
+  }
   if (!env.CRON_SECRET || env.CRON_SECRET.length < 16) {
     warning("CRON_SECRET is not set (16+ characters): failed notification e-mails will not be retried");
   }
   if (!env.SMTP_FROM || (!env.SMTP_HOST && env.SMTP_TRANSPORT !== "json")) {
-    warning("SMTP is not configured: warning/elimination e-mails will not be sent");
+    warning("SMTP is not configured: invitation and absence e-mails will not be sent (links must be handed over manually)");
   }
   return issues;
 }

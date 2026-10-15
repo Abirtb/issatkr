@@ -81,11 +81,12 @@ nano .env.production      # fill in every value; never commit this file
 
 | Variable | Required | Value |
 |---|---|---|
+| `APP_URL` | yes | Public address exactly as users type it, e.g. `https://YOUR_DOMAIN` or `https://YOUR_DOMAIN:4434`. Used in invitation and password e-mails. |
 | `DATABASE_URL` | yes | `file:/data/issatkr.db` (inside the volume). The app **refuses to start** with a development or test database (`dev.db`, `test`, `seed` in the path). |
 | `UPLOAD_DIR` | yes | `/data/uploads` |
 | `AUTH_SECRET` | yes | 32+ random characters. Placeholders are refused at startup. Changing it signs everyone out. |
 | `CRON_SECRET` | recommended | 16+ random characters. Without it, failed e-mails are not retried. |
-| `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM` | for e-mails | Institutional SMTP. Without them the app runs, but warning and elimination e-mails are not sent (a startup warning is logged). |
+| `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM` | for e-mails | Institutional SMTP: **account invitations**, password links and absence warnings. Without them the app runs, but the admin must copy each invitation link by hand (a startup warning is logged). |
 | `ATTENDANCE_TIME_ZONE` | no | Default `Africa/Tunis` (90-minute attendance window) |
 | `APP_PORT` | no | Host loopback port (default 3000). Set it in the shell or in a `.env` file next to `compose.yaml` if 3000 is taken. |
 

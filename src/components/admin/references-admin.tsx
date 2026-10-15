@@ -28,6 +28,7 @@ function ReferenceSection({
   const [editing, setEditing] = useState<ReferenceRow | null>(null);
   const editForm = useRevealOnOpen<HTMLFormElement>(editing?.id);
   const [message, setMessage] = useState("");
+  const [importing, setImporting] = useState(false);
 
   const load = useCallback(async () => {
     const response = await fetch(endpoint);
@@ -71,6 +72,27 @@ function ReferenceSection({
     }
   }
 
+  async function importFile(file: File) {
+    setImporting(true);
+    setMessage("");
+    const body = new FormData();
+    body.set("file", file);
+    const response = await fetch(`${endpoint}/import`, { method: "POST", body });
+    const data = await response.json();
+    setImporting(false);
+    if (!response.ok) {
+      setMessage(data.error ?? "Import impossible");
+      return;
+    }
+    setMessage(
+      [
+        `Import : ${data.created} ajouté(s), ${data.updated} mis à jour${data.errorCount ? `, ${data.errorCount} ligne(s) ignorée(s)` : ""}`,
+        ...data.errors,
+      ].join("\n"),
+    );
+    await load();
+  }
+
   async function deactivate(id: string) {
     const response = await fetch(`${endpoint}?id=${id}`, { method: "DELETE" });
     const data = await response.json();
@@ -98,7 +120,28 @@ function ReferenceSection({
         />
         <Button type="submit">Ajouter</Button>
       </form>
-      {message ? <p className="mt-2 text-xs text-muted">{message}</p> : null}
+      <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1">
+        <label className={importing ? "pointer-events-none opacity-60" : "cursor-pointer"}>
+          <span className="inline-flex h-10 items-center rounded-lg border border-border px-3 text-sm hover:bg-surface-2">
+            {importing ? "Import en cours…" : "Importer CSV / Excel"}
+          </span>
+          <input
+            type="file"
+            accept=".csv,.xlsx,.xls"
+            className="hidden"
+            disabled={importing}
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              if (file) void importFile(file);
+              event.target.value = "";
+            }}
+          />
+        </label>
+        <span className="text-xs text-muted">Colonnes : code, libellé</span>
+      </div>
+      {message ? (
+        <p className="mt-2 whitespace-pre-line text-xs text-muted">{message}</p>
+      ) : null}
       <div className="mt-4 divide-y divide-border">
         {rows.map((row) => (
           <div key={row.id} className="flex items-center gap-3 py-3">

@@ -89,3 +89,15 @@ test("sessions: a password change invalidates the session fingerprint", async ()
   assert.notEqual(before, passwordFingerprint("$2b$12$newhash"));
   assert.ok(!before.includes("oldhash"));
 });
+
+test("invitation links: random token in the #fragment, only a hash stored", async () => {
+  const { accountLink, hashToken, unusablePassword } = await import("../src/lib/account-tokens");
+  const link = accountLink("https://uk.univ-k.rnu.tn:4434", "A".repeat(43));
+  const url = new URL(link);
+  assert.equal(url.pathname, "/activation");
+  assert.equal(url.search, "", "token must not be in the query string (server/proxy logs)");
+  assert.equal(url.hash, `#${"A".repeat(43)}`);
+  assert.match(hashToken("abc"), /^[0-9a-f]{64}$/);
+  assert.notEqual(hashToken("abc"), "abc");
+  assert.notEqual(unusablePassword(), unusablePassword());
+});

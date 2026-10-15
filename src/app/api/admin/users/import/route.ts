@@ -1,9 +1,9 @@
-import { randomBytes } from "node:crypto";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { hashPassword, requireAdmin, authFailure } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { passwordProblem } from "@/lib/password-policy";
+import { createAndSendLink, unusablePassword } from "@/lib/account-tokens";
 import { throttleUser } from "@/lib/rate-limit";
 import { audit, logServerError } from "@/lib/security-log";
 import {
@@ -15,11 +15,6 @@ import {
 const MAX_TEACHERS = 500;
 const emailSchema = z.string().email().max(200);
 
-function generatePassword() {
-  // Avoids look-alike characters so the password can be read aloud or printed.
-  const alphabet = "abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-  return [...randomBytes(10)].map((byte) => alphabet[byte % alphabet.length]).join("");
-}
 
 export async function POST(req: Request) {
   try {
@@ -84,7 +79,9 @@ export async function POST(req: Request) {
       errors.push(`Compte administrateur ignoré : ${user.email}`);
     }
 
-    const credentials: { name: string; email: string; password: string }[] = [];
+    // No password in the file → invitation link (the admin never sees a password).
+    const invitations: { name: string; email: string; emailed: boolean; expiresAt: string; link?: string }[] = [];
+    let created = 0;
     let updated = 0;
     for (const row of unique.values()) {
       if (existingEmails.has(row.email)) {
@@ -102,24 +99,28 @@ export async function POST(req: Request) {
         updated++;
         continue;
       }
-      const password = row.password || generatePassword();
-      await prisma.user.create({
+      const user = await prisma.user.create({
         data: {
           name: row.name,
           email: row.email,
-          password: await hashPassword(password),
+          password: await hashPassword(row.password || unusablePassword()),
           role: row.role ?? "PROF",
         },
+        select: { id: true, name: true, email: true },
       });
-      credentials.push({ name: row.name, email: row.email, password });
+      created++;
+      if (!row.password) {
+        const link = await createAndSendLink(req, user, "INVITE", admin.id);
+        invitations.push({ name: user.name, email: user.email, ...link });
+      }
     }
 
-    await audit(admin, "users.import", { type: "workbook", id: null }, { created: credentials.length, updated }, req);
+    await audit(admin, "users.import", { type: "workbook", id: null }, { created, updated, invited: invitations.length, emailed: invitations.filter((i) => i.emailed).length }, req);
     return NextResponse.json({
-      created: credentials.length,
+      created,
       updated,
       errors,
-      credentials,
+      invitations,
     });
   } catch (error) {
     const denied = authFailure(error);

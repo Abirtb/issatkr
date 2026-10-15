@@ -24,6 +24,11 @@ enum NotificationType {
   ELIMINATION
 }
 
+enum TokenPurpose {
+  INVITE
+  RESET
+}
+
 enum NotificationStatus {
   PENDING
   SENDING
@@ -43,6 +48,7 @@ model User {
   createdAt            DateTime     @default(now())
   updatedAt            DateTime     @default(now()) @updatedAt
   taughtSessions       Session[]    @relation("SessionProfessor")
+  accountTokens        AccountToken[]
   attendanceAmendments Attendance[] @relation("AttendanceAmendments")
 }
 
@@ -232,4 +238,20 @@ model AuditLog {
   @@index([createdAt])
   @@index([actorId, createdAt])
   @@index([targetType, targetId])
+}
+
+// One-time links to set a password (invitation or reset). Only a SHA-256 hash
+// of the token is stored; the token itself exists only in the link.
+model AccountToken {
+  id          String       @id @default(cuid())
+  userId      String
+  tokenHash   String       @unique
+  purpose     TokenPurpose
+  expiresAt   DateTime
+  usedAt      DateTime?
+  createdById String?
+  createdAt   DateTime     @default(now())
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }

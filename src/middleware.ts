@@ -7,6 +7,10 @@ const publicPaths = [
   "/api/cron/notifications",
   "/health",
   "/api/health",
+  // Invitation / password links: the person has no session yet.
+  "/activation",
+  "/api/auth/invitation",
+  "/api/auth/invitation/check",
 ];
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 const MAX_BODY_BYTES = 12 * 1024 * 1024;

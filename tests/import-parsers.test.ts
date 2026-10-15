@@ -48,3 +48,17 @@ test("parses teachers with split or full names and roles", () => {
   assert.equal(rows[0].role, "DEPARTMENT_HEAD");
   assert.equal(rows[1].role, null);
 });
+
+test("parses subjects/levels with accented or alternative headers, keeps line numbers", async () => {
+  const { parseReferenceRows } = await import("../src/lib/parse-upload");
+  const csv = new TextEncoder().encode("code;libellé\nALGO;Algorithmique\n;\nBD;Bases de données\n");
+  const rows = parseReferenceRows(parseWorkbook(csv.buffer as ArrayBuffer));
+  assert.deepEqual(rows, [
+    { line: 2, code: "ALGO", name: "Algorithmique" },
+    { line: 4, code: "BD", name: "Bases de données" },
+  ]);
+  const excel = parseReferenceRows(
+    parseWorkbook(workbook([["Sigle", "Intitulé"], ["L1", "Licence 1"]])),
+  );
+  assert.deepEqual(excel, [{ line: 2, code: "L1", name: "Licence 1" }]);
+});
