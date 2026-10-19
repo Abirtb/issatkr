@@ -13,7 +13,7 @@ type UserRow = {
   email: string;
   role: Role;
   active: boolean;
-  invitation: "pending" | "expired" | null;
+  invitation: "not_sent" | "pending" | "expired" | null;
   _count: { taughtSessions: number };
 };
 
@@ -45,6 +45,7 @@ export function AdminUsers() {
   const editForm = useRevealOnOpen<HTMLFormElement>(editing?.id);
   const [importing, setImporting] = useState(false);
   const [links, setLinks] = useState<PendingLink[]>([]);
+  const [sending, setSending] = useState(false);
 
   // E-mailed → just say so; not e-mailed (SMTP off/failed) → keep the link to hand over.
   function keepUndelivered(person: { name: string; email: string }, delivery: Delivery) {
@@ -79,6 +80,46 @@ export function AdminUsers() {
       data.emailed
         ? `Lien envoyé par e-mail à ${user.email} (valable jusqu’au ${formatDate(data.expiresAt)}).`
         : `E-mail non envoyé (SMTP non configuré ou indisponible) : transmettez le lien ci-dessous à ${user.name}.`,
+    );
+    await load();
+  }
+
+  // Accounts that still need an invitation: never sent, or the link expired.
+  const toInvite = users.filter(
+    (user) => user.active && (user.invitation === "not_sent" || user.invitation === "expired"),
+  );
+
+  async function sendAllInvitations() {
+    if (
+      !window.confirm(
+        `Envoyer une invitation à ${toInvite.length} personne(s) ?\nChacune reçoit un lien valable 72 h pour choisir son mot de passe.`,
+      )
+    ) {
+      return;
+    }
+    setSending(true);
+    const response = await fetch("/api/admin/users/invite", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids: toInvite.map((user) => user.id) }),
+    });
+    const data = await response.json();
+    setSending(false);
+    if (!response.ok) {
+      setMessage(data.error ?? "Envoi impossible");
+      return;
+    }
+    const results: (Delivery & { name: string; email: string })[] = data.results ?? [];
+    for (const result of results) keepUndelivered(result, result);
+    const emailed = results.filter((result) => result.emailed).length;
+    const notEmailed = results.length - emailed;
+    setMessage(
+      [
+        `${emailed} invitation(s) envoyée(s) par e-mail.`,
+        notEmailed ? `${notEmailed} lien(s) à transmettre vous-même (liste ci-dessous).` : "",
+      ]
+        .filter(Boolean)
+        .join("\n"),
     );
     await load();
   }
@@ -119,16 +160,11 @@ export function AdminUsers() {
       setMessage(data.error);
       return;
     }
-    if (data.invitation) {
-      keepUndelivered(data.user, data.invitation);
-      setMessage(
-        data.invitation.emailed
-          ? `Compte créé. Invitation envoyée à ${data.user.email} (valable jusqu’au ${formatDate(data.invitation.expiresAt)}).`
-          : `Compte créé, mais l’e-mail n’a pas pu être envoyé : transmettez le lien ci-dessous à ${data.user.name}.`,
-      );
-    } else {
-      setMessage("Utilisateur créé avec le mot de passe saisi.");
-    }
+    setMessage(
+      form.password
+        ? "Utilisateur créé avec le mot de passe saisi."
+        : `Compte créé pour ${data.user.name}. Aucun e-mail n’a été envoyé : cliquez sur « Envoyer l’invitation » quand vous êtes prêt.`,
+    );
     setForm({ name: "", email: "", password: "", role: "PROF" });
     await load();
   }
@@ -174,15 +210,12 @@ export function AdminUsers() {
       setMessage(data.error);
       return;
     }
-    const invitations: (Delivery & { name: string; email: string })[] = data.invitations ?? [];
-    for (const invitation of invitations) keepUndelivered(invitation, invitation);
-    const emailed = invitations.filter((invitation) => invitation.emailed).length;
-    const notEmailed = invitations.length - emailed;
     setMessage(
       [
         `${data.created} comptes créés, ${data.updated} mis à jour.`,
-        invitations.length ? `${emailed} invitation(s) envoyée(s) par e-mail.` : "",
-        notEmailed ? `${notEmailed} lien(s) à transmettre vous-même (liste ci-dessous).` : "",
+        data.awaitingInvitation
+          ? `${data.awaitingInvitation} compte(s) sans mot de passe : aucune invitation n’a été envoyée. Utilisez « Envoyer les invitations » quand vous êtes prêt.`
+          : "",
         ...data.errors,
       ]
         .filter(Boolean)
@@ -203,8 +236,8 @@ export function AdminUsers() {
         <p className="mt-1 text-sm text-muted">
           Colonnes : nom, prenom (ou nom_complet), email. Facultatif :
           mot_de_passe, role (enseignant, chef, admin). Les comptes existants
-          sont mis à jour. Sans mot de passe, chaque nouvel enseignant reçoit
-          par e-mail un lien d’activation pour choisir le sien.
+          sont mis à jour. Aucun e-mail n’est envoyé à l’import : les comptes
+          sans mot de passe sont invités ensuite, ensemble ou un par un.
         </p>
         <div className="mt-3 flex flex-wrap gap-2">
           <label className={importing ? "pointer-events-none opacity-60" : "cursor-pointer"}>
@@ -267,11 +300,12 @@ export function AdminUsers() {
           ))}
         </select>
         <p className="text-xs text-muted sm:col-span-2">
-          Laissez le mot de passe vide (recommandé) : la personne reçoit par
-          e-mail un lien valable 72 h pour choisir elle-même son mot de passe.
+          Laissez le mot de passe vide (recommandé) : rien n’est envoyé à
+          l’ajout. Envoyez ensuite l’invitation (lien valable 72 h) avec le
+          bouton « Envoyer l’invitation » de la liste.
         </p>
         <Button type="submit" className="sm:col-span-2">
-          {form.password ? "Ajouter l’utilisateur" : "Ajouter et envoyer l’invitation"}
+          Ajouter l’utilisateur
         </Button>
       </form>
 
@@ -315,6 +349,23 @@ export function AdminUsers() {
         </div>
       ) : null}
 
+      {toInvite.length ? (
+        <div className="surface-card mt-6 flex flex-wrap items-center gap-3 rounded-xl p-4">
+          <p className="min-w-0 flex-1 text-sm">
+            <span className="font-medium">
+              {toInvite.length} compte(s) en attente d’invitation
+            </span>
+            <span className="block text-xs text-muted">
+              Jamais invités, ou lien expiré. Vous pouvez aussi les inviter un
+              par un dans la liste.
+            </span>
+          </p>
+          <Button variant="gold" disabled={sending} onClick={() => void sendAllInvitations()}>
+            {sending ? "Envoi en cours…" : `Envoyer les invitations (${toInvite.length})`}
+          </Button>
+        </div>
+      ) : null}
+
       <div className="mt-6 overflow-x-auto rounded-xl border border-border">
         <table className="w-full min-w-[680px] text-sm">
           <thead className="bg-surface-2 text-left text-muted">
@@ -338,11 +389,13 @@ export function AdminUsers() {
                 <td className="px-4 py-3">
                   {!user.active
                     ? "Désactivé"
-                    : user.invitation === "pending"
-                      ? "Invitation envoyée"
-                      : user.invitation === "expired"
-                        ? "Invitation expirée"
-                        : "Actif"}
+                    : user.invitation === "not_sent"
+                      ? "Invitation non envoyée"
+                      : user.invitation === "pending"
+                        ? "Invitation envoyée"
+                        : user.invitation === "expired"
+                          ? "Invitation expirée"
+                          : "Actif"}
                 </td>
                 <td className="space-x-2 whitespace-nowrap px-4 py-2 text-right">
                   <button
@@ -358,7 +411,11 @@ export function AdminUsers() {
                       onClick={() => void sendLink(user)}
                       className="min-h-9 px-1 text-navy hover:underline"
                     >
-                      {user.invitation ? "Renvoyer l’invitation" : "Envoyer un lien"}
+                      {user.invitation === "not_sent"
+                        ? "Envoyer l’invitation"
+                        : user.invitation
+                          ? "Renvoyer l’invitation"
+                          : "Envoyer un lien"}
                     </button>
                   ) : null}
                   {user.active ? (

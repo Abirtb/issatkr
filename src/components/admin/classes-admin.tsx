@@ -58,6 +58,12 @@ export function AdminClasses() {
   const [editingStudent, setEditingStudent] = useState<StudentRow | null>(null);
   const [classDraft, setClassDraft] = useState<ClassRow | null>(null);
   const studentEditForm = useRevealOnOpen<HTMLFormElement>(editingStudent?.id);
+  // List filters. levelFilter: "" = all, "aucun" = no level, else a level id.
+  const [query, setQuery] = useState("");
+  const [levelFilter, setLevelFilter] = useState("");
+  const [yearFilter, setYearFilter] = useState("");
+  const [semesterFilter, setSemesterFilter] = useState("");
+  const [programFilter, setProgramFilter] = useState("");
 
   async function load() {
     const response = await fetch("/api/admin/classes");
@@ -72,6 +78,9 @@ export function AdminClasses() {
   }
 
   useEffect(() => {
+    // The dashboard links here with ?niveau=aucun.
+    const niveau = new URLSearchParams(window.location.search).get("niveau");
+    if (niveau) setLevelFilter(niveau);
     void load();
     fetch("/api/admin/levels")
       .then((response) => response.json())
@@ -83,6 +92,31 @@ export function AdminClasses() {
         setNewLevelId(active[0]?.id ?? "");
       });
   }, []);
+
+  const years = [...new Set(classes.map((item) => item.academicYear).filter(Boolean))].sort().reverse() as string[];
+  const programs = [...new Set(classes.map((item) => item.program).filter(Boolean))].sort() as string[];
+  const search = query.trim().toLowerCase();
+  const filteredClasses = classes.filter(
+    (item) =>
+      (!search ||
+        [item.name, item.code, item.program ?? ""].some((value) =>
+          value.toLowerCase().includes(search),
+        )) &&
+      (!levelFilter ||
+        (levelFilter === "aucun" ? !item.levelId : item.levelId === levelFilter)) &&
+      (!yearFilter || item.academicYear === yearFilter) &&
+      (!semesterFilter || String(item.semester ?? "") === semesterFilter) &&
+      (!programFilter || item.program === programFilter),
+  );
+  const filtering = Boolean(search || levelFilter || yearFilter || semesterFilter || programFilter);
+
+  function resetFilters() {
+    setQuery("");
+    setLevelFilter("");
+    setYearFilter("");
+    setSemesterFilter("");
+    setProgramFilter("");
+  }
 
   async function createClass(event: React.FormEvent) {
     event.preventDefault();
@@ -148,6 +182,9 @@ export function AdminClasses() {
       lines.push(
         `${data.classesCreated} classes créées, ${data.classesUpdated} mises à jour · ${data.studentsCreated} étudiants créés, ${data.studentsUpdated} mis à jour`,
       );
+      for (const group of data.groups ?? []) {
+        if (group.level) lines.push(`${group.className} → niveau ${group.level}`);
+      }
       if (data.emails) lines.push(...describeEmails(data.emails));
       if (data.warnings?.length) lines.push(...data.warnings);
     } else {
@@ -406,14 +443,94 @@ export function AdminClasses() {
         </p>
       ) : null}
 
+      {classes.length > 0 ? (
+        <div className="surface-card grid gap-2 rounded-xl p-4 sm:grid-cols-2 lg:grid-cols-4">
+          <Input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Rechercher une classe…"
+            className="sm:col-span-2 lg:col-span-4"
+            aria-label="Rechercher une classe"
+          />
+          <select
+            value={levelFilter}
+            onChange={(event) => setLevelFilter(event.target.value)}
+            className="field-select"
+            aria-label="Filtrer par niveau"
+          >
+            <option value="">Tous les niveaux</option>
+            {levels.map((level) => (
+              <option key={level.id} value={level.id}>
+                {level.code} · {level.name}
+              </option>
+            ))}
+            <option value="aucun">Sans niveau</option>
+          </select>
+          <select
+            value={programFilter}
+            onChange={(event) => setProgramFilter(event.target.value)}
+            className="field-select"
+            aria-label="Filtrer par parcours"
+          >
+            <option value="">Tous les parcours</option>
+            {programs.map((program) => (
+              <option key={program} value={program}>
+                {program}
+              </option>
+            ))}
+          </select>
+          <select
+            value={yearFilter}
+            onChange={(event) => setYearFilter(event.target.value)}
+            className="field-select"
+            aria-label="Filtrer par année"
+          >
+            <option value="">Toutes les années</option>
+            {years.map((year) => (
+              <option key={year} value={year}>
+                {year}
+              </option>
+            ))}
+          </select>
+          <select
+            value={semesterFilter}
+            onChange={(event) => setSemesterFilter(event.target.value)}
+            className="field-select"
+            aria-label="Filtrer par semestre"
+          >
+            <option value="">Tous les semestres</option>
+            <option value="1">Semestre 1</option>
+            <option value="2">Semestre 2</option>
+            <option value="3">Semestre 3</option>
+          </select>
+          <div className="flex items-center gap-3 text-sm text-muted sm:col-span-2 lg:col-span-4">
+            <span>
+              {filteredClasses.length} classe{filteredClasses.length > 1 ? "s" : ""}
+              {filtering ? ` sur ${classes.length}` : ""} ·{" "}
+              {filteredClasses.reduce((total, item) => total + item._count.students, 0)} étudiants
+            </span>
+            {filtering ? (
+              <button type="button" onClick={resetFilters} className="underline hover:text-ink">
+                Effacer les filtres
+              </button>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+
       <div className="space-y-3">
+        {classes.length > 0 && filteredClasses.length === 0 ? (
+          <p className="rounded-xl border border-dashed border-border px-6 py-10 text-center text-sm text-muted">
+            Aucune classe ne correspond à ces filtres.
+          </p>
+        ) : null}
         {classes.length === 0 ? (
           <p className="rounded-xl border border-dashed border-border px-6 py-10 text-center text-sm text-muted">
             Aucune classe pour le moment. Importez un fichier ou ajoutez-en une
             manuellement.
           </p>
         ) : null}
-        {classes.map((item) => (
+        {filteredClasses.map((item) => (
           <div key={item.id} className="surface-card rounded-xl">
             <div className="flex flex-wrap items-center gap-3 p-4">
               <div className="min-w-0 flex-1">
@@ -499,6 +616,23 @@ export function AdminClasses() {
                     }
                     placeholder="Année"
                   />
+                  <select
+                    value={classDraft.semester ?? ""}
+                    onChange={(event) =>
+                      setClassDraft({
+                        ...classDraft,
+                        semester: event.target.value
+                          ? Number(event.target.value)
+                          : null,
+                      })
+                    }
+                    className="field-select"
+                  >
+                    <option value="">Semestre non défini</option>
+                    <option value="1">Semestre 1</option>
+                    <option value="2">Semestre 2</option>
+                    <option value="3">Semestre 3</option>
+                  </select>
                   <select
                     value={classDraft.levelId ?? ""}
                     onChange={(event) =>

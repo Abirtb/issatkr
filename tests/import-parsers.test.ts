@@ -2,8 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import * as XLSX from "xlsx";
 import {
+  matchLevel,
+  normalizeAcademicYear,
   normalizeCin,
   parseCinEmailWorkbook,
+  parseEnrollmentWorkbook,
   parseTeacherRows,
   parseWorkbook,
 } from "../src/lib/parse-upload";
@@ -61,4 +64,51 @@ test("parses subjects/levels with accented or alternative headers, keeps line nu
     parseWorkbook(workbook([["Sigle", "Intitulé"], ["L1", "Licence 1"]])),
   );
   assert.deepEqual(excel, [{ line: 2, code: "L1", name: "Licence 1" }]);
+});
+
+test("scolarité export: parcours, year, semester and level number from the header", () => {
+  const groups = parseEnrollmentWorkbook(
+    workbook([
+      ["Année:", "2025", "", "Semestre:", "1"],
+      ["Parcours", "Génie Energétique : Tronc commun ( ISSAT Kairouan)"],
+      ["Identifiant Groupe:", "25186013", "", "Nom Groupe:", "1ENR-1", "Type:", "ob"],
+      [],
+      ["N° Inscription", "CIN", "Nom Ar", "Prénom Ar", "Nom Fr", "Prénom Fr"],
+      ["25100001", "05449214", "الذوادي", "وئام", "DHAOUADI", "Wiem"],
+    ]),
+  );
+  assert.equal(groups.length, 1);
+  const [group] = groups;
+  assert.equal(group.name, "1ENR-1");
+  assert.equal(group.externalId, "25186013");
+  assert.equal(group.program, "Génie Energétique : Tronc commun ( ISSAT Kairouan)");
+  assert.equal(group.academicYear, "2025-2026");
+  assert.equal(group.semester, 1);
+  assert.equal(group.levelNumber, 1);
+  assert.equal(group.students[0].cin, "05449214");
+});
+
+test("academic year: a single year becomes a range, ranges are kept", () => {
+  assert.equal(normalizeAcademicYear("2025"), "2025-2026");
+  assert.equal(normalizeAcademicYear("2025/2026"), "2025-2026");
+  assert.equal(normalizeAcademicYear("2026-2027"), "2026-2027");
+  assert.equal(normalizeAcademicYear(""), "");
+});
+
+test("level detection: unique number, parcours family, explicit hint, otherwise none", () => {
+  const L1 = { id: "l1", code: "L1", name: "Licence 1" };
+  const M1 = { id: "m1", code: "M1", name: "Master 1" };
+  const ING1 = { id: "i1", code: "ING1", name: "Cycle ingénieur 1" };
+  const L2 = { id: "l2", code: "L2", name: "Licence 2" };
+  const group = (levelNumber: number | null, program = "", levelHint = "") => ({ levelNumber, program, levelHint });
+
+  assert.equal(matchLevel([L1, L2], group(1, "Génie Energétique"))?.id, "l1");
+  assert.equal(matchLevel([L1, L2], group(3)), null);
+  assert.equal(matchLevel([L1, M1, ING1], group(1, "Mastère de recherche"))?.id, "m1");
+  assert.equal(matchLevel([L1, M1, ING1], group(1, "Cycle Ingénieur Informatique"))?.id, "i1");
+  assert.equal(matchLevel([L1, M1, ING1], group(1, "Licence en Génie Energétique"))?.id, "l1");
+  // Several families and nothing in the parcours: no guess.
+  assert.equal(matchLevel([L1, M1, ING1], group(1, "Génie Energétique")), null);
+  assert.equal(matchLevel([L1, M1], group(null, "", "Master 1"))?.id, "m1");
+  assert.equal(matchLevel([L1, M1], group(null)), null);
 });

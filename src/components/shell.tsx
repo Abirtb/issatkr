@@ -22,6 +22,7 @@ const profNav = [
 ];
 
 const adminNav = [
+  { href: "/admin", label: "Tableau de bord" },
   { href: "/admin/classes", label: "Classes" },
   { href: "/admin/references", label: "Matières et niveaux" },
   { href: "/admin/users", label: "Utilisateurs" },
@@ -52,8 +53,10 @@ function SidebarNav({
   return (
     <nav className="flex flex-1 flex-col gap-1 overflow-y-auto px-3 py-4">
       {items.map((item) => {
+        // "/admin" is the home: active only on itself, not on every admin page.
         const active =
-          pathname === item.href || pathname.startsWith(`${item.href}/`);
+          pathname === item.href ||
+          (item.href !== "/admin" && pathname.startsWith(`${item.href}/`));
         return (
           <Link
             key={item.href}

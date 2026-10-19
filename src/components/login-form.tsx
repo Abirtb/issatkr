@@ -35,7 +35,7 @@ export function LoginForm() {
     }
     router.push(
       data.role === "ADMIN"
-        ? "/admin/classes"
+        ? "/admin"
         : data.role === "DEPARTMENT_HEAD"
           ? "/schedule"
           : "/classes",

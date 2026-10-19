@@ -53,3 +53,7 @@ next-env.d.ts
 /backups
 *.db-wal
 *.db-shm
+
+# Built from the real scolarité export (real birth dates/places): keep local only
+docs/samples/test-live/08_scolarite_1ENR.xls
+docs/samples/test-live/09_emails_cin_1ENR.xlsx

@@ -3,7 +3,7 @@ import { z } from "zod";
 import { hashPassword, requireAdmin, authFailure } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { passwordProblem } from "@/lib/password-policy";
-import { createAndSendLink, unusablePassword } from "@/lib/account-tokens";
+import { unusablePassword } from "@/lib/account-tokens";
 import { throttleUser } from "@/lib/rate-limit";
 import { audit, logServerError } from "@/lib/security-log";
 import {
@@ -79,8 +79,9 @@ export async function POST(req: Request) {
       errors.push(`Compte administrateur ignoré : ${user.email}`);
     }
 
-    // No password in the file → invitation link (the admin never sees a password).
-    const invitations: { name: string; email: string; emailed: boolean; expiresAt: string; link?: string }[] = [];
+    // No password in the file → the account waits for an invitation, which the
+    // admin sends separately from the users page (never automatically).
+    let awaitingInvitation = 0;
     let created = 0;
     let updated = 0;
     for (const row of unique.values()) {
@@ -91,7 +92,7 @@ export async function POST(req: Request) {
             name: row.name,
             ...(row.role ? { role: row.role } : {}),
             ...(row.password
-              ? { password: await hashPassword(row.password) }
+              ? { password: await hashPassword(row.password), awaitingActivation: false }
               : {}),
             active: true,
           },
@@ -99,28 +100,25 @@ export async function POST(req: Request) {
         updated++;
         continue;
       }
-      const user = await prisma.user.create({
+      await prisma.user.create({
         data: {
           name: row.name,
           email: row.email,
           password: await hashPassword(row.password || unusablePassword()),
           role: row.role ?? "PROF",
+          awaitingActivation: !row.password,
         },
-        select: { id: true, name: true, email: true },
       });
       created++;
-      if (!row.password) {
-        const link = await createAndSendLink(req, user, "INVITE", admin.id);
-        invitations.push({ name: user.name, email: user.email, ...link });
-      }
+      if (!row.password) awaitingInvitation++;
     }
 
-    await audit(admin, "users.import", { type: "workbook", id: null }, { created, updated, invited: invitations.length, emailed: invitations.filter((i) => i.emailed).length }, req);
+    await audit(admin, "users.import", { type: "workbook", id: null }, { created, updated, awaitingInvitation }, req);
     return NextResponse.json({
       created,
       updated,
       errors,
-      invitations,
+      awaitingInvitation,
     });
   } catch (error) {
     const denied = authFailure(error);

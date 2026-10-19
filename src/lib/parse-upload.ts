@@ -23,8 +23,56 @@ export type EnrollmentGroup = {
   program: string;
   academicYear: string;
   semester: number | null;
+  // Level hints for matchLevel(): an explicit "Niveau" cell, else the year of
+  // study that starts the group name ("1ENR-1" → 1).
+  levelHint: string;
+  levelNumber: number | null;
   students: EnrollmentStudent[];
 };
+
+// The scolarité export writes the academic year as its first calendar year
+// ("2025"); classes elsewhere use "2025-2026".
+export function normalizeAcademicYear(raw: string) {
+  const value = raw.trim();
+  if (/^\d{4}$/.test(value)) return `${value}-${Number(value) + 1}`;
+  const range = value.match(/^(\d{4})\s*[\/\-]\s*(\d{4})$/);
+  return range ? `${range[1]}-${range[2]}` : value;
+}
+
+export type LevelOption = { id: string; code: string; name: string };
+
+// Picks the academic level of an imported group, or null when it is not
+// certain (the admin then sets it by hand). Never guesses between families.
+export function matchLevel(
+  levels: LevelOption[],
+  group: Pick<EnrollmentGroup, "levelHint" | "levelNumber" | "program">,
+): LevelOption | null {
+  if (group.levelHint) {
+    const hint = norm(group.levelHint);
+    const exact = levels.find((level) => norm(level.code) === hint || norm(level.name) === hint);
+    if (exact) return exact;
+  }
+  if (group.levelNumber == null) return null;
+  const numberOf = (level: LevelOption) =>
+    Number((level.code.match(/(\d+)\s*$/) ?? level.name.match(/(\d+)\s*$/))?.[1] ?? NaN);
+  const candidates = levels.filter((level) => numberOf(level) === group.levelNumber);
+  if (candidates.length <= 1) return candidates[0] ?? null;
+
+  // Several families share the number (L1, M1, ING1…): use the parcours wording.
+  const program = norm(group.program);
+  const family = /master|mastere/.test(program)
+    ? /^(m|master)\d/
+    : /ingenieur|cycleing/.test(program)
+      ? /^(ing|ingenieur)\d/
+      : /prepa|preparatoire/.test(program)
+        ? /^(prepa|cp)\d/
+        : /licence/.test(program)
+          ? /^(l|lic|licence)\d/
+          : null;
+  if (!family) return null;
+  const matches = candidates.filter((level) => family.test(norm(level.code)));
+  return matches.length === 1 ? matches[0] : null;
+}
 
 function norm(s: string) {
   return s
@@ -136,8 +184,10 @@ export function parseEnrollmentWorkbook(buffer: ArrayBuffer): EnrollmentGroup[] 
         code: name.toUpperCase().replace(/\s+/g, ""),
         externalId,
         program: findMetadata(metadataRows, "Parcours"),
-        academicYear: findMetadata(metadataRows, "Année"),
+        academicYear: normalizeAcademicYear(findMetadata(metadataRows, "Année")),
         semester: Number.isInteger(semesterRaw) ? semesterRaw : null,
+        levelHint: findMetadata(metadataRows, "Niveau"),
+        levelNumber: Number(name.match(/^\s*(\d)/)?.[1] ?? NaN) || null,
         students,
       },
     ];

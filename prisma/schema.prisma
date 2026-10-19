@@ -43,6 +43,9 @@ model User {
   name                 String
   role                 Role         @default(PROF)
   active               Boolean      @default(true)
+  // Created without a password: waits for an invitation link (sent by an admin,
+  // never automatically). Cleared once a password is set.
+  awaitingActivation   Boolean      @default(false)
   // Bumped on logout: every token issued before is rejected.
   sessionVersion       Int          @default(0)
   createdAt            DateTime     @default(now())

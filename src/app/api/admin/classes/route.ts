@@ -8,8 +8,8 @@ const classSchema = z.object({
   id: z.string().min(1).optional(),
   name: z.string().trim().min(1).max(100),
   code: z.string().trim().min(1).max(50),
-  program: z.string().trim().max(200).optional(),
-  academicYear: z.string().trim().max(20).optional(),
+  program: z.string().trim().max(200).nullable().optional(),
+  academicYear: z.string().trim().max(20).nullable().optional(),
   semester: z.coerce.number().int().min(1).max(3).nullable().optional(),
   levelId: z.string().min(1).nullable().optional(),
 });

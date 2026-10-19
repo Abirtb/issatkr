@@ -48,6 +48,7 @@ export type AuditAction =
   | "auth.password_change"
   | "auth.invitation_accept"
   | "user.invite"
+  | "user.invite_batch"
   | "user.password_link"
   | "student.create"
   | "student.update"

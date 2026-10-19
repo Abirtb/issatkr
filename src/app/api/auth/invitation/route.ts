@@ -50,7 +50,7 @@ export async function POST(req: Request) {
     const [user] = await prisma.$transaction([
       prisma.user.update({
         where: { id: record.userId },
-        data: { password: passwordHash, sessionVersion: { increment: 1 } },
+        data: { password: passwordHash, awaitingActivation: false, sessionVersion: { increment: 1 } },
       }),
       prisma.accountToken.updateMany({
         where: { userId: record.userId, usedAt: null, expiresAt: { gt: now } },

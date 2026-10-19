@@ -4,13 +4,13 @@ import { hashPassword, requireAdmin, authFailure } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { newPasswordField } from "@/lib/password-policy";
 import { audit } from "@/lib/security-log";
-import { createAndSendLink, unusablePassword } from "@/lib/account-tokens";
+import { unusablePassword } from "@/lib/account-tokens";
 
 const roleSchema = z.enum(["ADMIN", "DEPARTMENT_HEAD", "PROF"]);
 const createSchema = z.object({
   name: z.string().trim().min(2).max(100),
   email: z.string().trim().toLowerCase().email().max(200),
-  // Empty or absent: the user receives an invitation link and chooses it.
+  // Empty or absent: the account waits for an invitation, sent separately.
   password: z.union([newPasswordField, z.literal("")]).optional(),
   role: roleSchema,
 });
@@ -33,11 +33,16 @@ const selection = {
   _count: { select: { taughtSessions: true } },
 } as const;
 
-// "pending"/"expired": invited but the link was never used (no password chosen yet).
-function invitationStatus(tokens: { purpose: string; usedAt: Date | null; expiresAt: Date }[]) {
+// For accounts without a password yet: "not_sent" (no invitation sent so far),
+// "pending" (a link is still valid) or "expired".
+function invitationStatus(
+  awaitingActivation: boolean,
+  tokens: { purpose: string; usedAt: Date | null; expiresAt: Date }[],
+) {
+  if (!awaitingActivation) return null;
   const invites = tokens.filter((token) => token.purpose === "INVITE");
-  if (!invites.length || invites.some((token) => token.usedAt)) return null;
-  return invites.some((token) => token.expiresAt > new Date()) ? "pending" : "expired";
+  if (!invites.length) return "not_sent";
+  return invites.some((token) => !token.usedAt && token.expiresAt > new Date()) ? "pending" : "expired";
 }
 
 export async function GET() {
@@ -46,14 +51,15 @@ export async function GET() {
     const users = await prisma.user.findMany({
       select: {
         ...selection,
+        awaitingActivation: true,
         accountTokens: { select: { purpose: true, usedAt: true, expiresAt: true } },
       },
       orderBy: [{ active: "desc" }, { name: "asc" }],
     });
     return NextResponse.json(
-      users.map(({ accountTokens, ...user }) => ({
+      users.map(({ accountTokens, awaitingActivation, ...user }) => ({
         ...user,
-        invitation: invitationStatus(accountTokens),
+        invitation: invitationStatus(awaitingActivation, accountTokens),
       })),
     );
   } catch (error) {
@@ -67,22 +73,20 @@ export async function POST(req: Request) {
   try {
     const admin = await requireAdmin();
     const input = createSchema.parse(await req.json());
-    const invite = !input.password;
+    // No password: nothing is sent now, the admin sends the invitation later.
+    const awaitingActivation = !input.password;
     const user = await prisma.user.create({
       data: {
         name: input.name,
         email: input.email,
         password: await hashPassword(input.password || unusablePassword()),
         role: input.role,
+        awaitingActivation,
       },
       select: selection,
     });
-    await audit(admin, "user.create", { type: "user", id: user.id }, { role: user.role, invited: invite }, req);
-    if (!invite) return NextResponse.json({ user }, { status: 201 });
-
-    const invitation = await createAndSendLink(req, user, "INVITE", admin.id);
-    await audit(admin, "user.invite", { type: "user", id: user.id }, { emailed: invitation.emailed }, req);
-    return NextResponse.json({ user, invitation }, { status: 201 });
+    await audit(admin, "user.create", { type: "user", id: user.id }, { role: user.role, awaitingActivation }, req);
+    return NextResponse.json({ user }, { status: 201 });
   } catch (error) {
     const denied = authFailure(error);
     if (denied) return denied;
@@ -125,7 +129,7 @@ export async function PATCH(req: Request) {
         role: input.role,
         active: input.active,
         ...(input.password
-          ? { password: await hashPassword(input.password) }
+          ? { password: await hashPassword(input.password), awaitingActivation: false }
           : {}),
       },
       select: selection,

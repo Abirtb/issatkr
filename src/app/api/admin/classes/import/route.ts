@@ -6,6 +6,7 @@ import { audit, logServerError } from "@/lib/security-log";
 import {
   MAX_IMPORT_BYTES,
   MAX_IMPORT_ROWS,
+  matchLevel,
   parseCinEmailWorkbook,
   parseEnrollmentWorkbook,
 } from "@/lib/parse-upload";
@@ -78,6 +79,13 @@ export async function POST(req: Request) {
       );
     }
 
+    const levels = await prisma.academicLevel.findMany({
+      where: { active: true },
+      select: { id: true, code: true, name: true },
+    });
+    const levelNames = new Map(levels.map((level) => [level.id, level.name]));
+    const groupLevels = new Map<string, string | null>();
+
     const result = await prisma.$transaction(
       async (tx) => {
         let classesCreated = 0;
@@ -92,6 +100,7 @@ export async function POST(req: Request) {
               })
             : null;
           cls ??= await tx.class.findUnique({ where: { code: group.code } });
+          const detectedLevel = matchLevel(levels, group);
 
           if (cls) {
             cls = await tx.class.update({
@@ -102,6 +111,8 @@ export async function POST(req: Request) {
                 program: group.program || cls.program,
                 academicYear: group.academicYear || cls.academicYear,
                 semester: group.semester ?? cls.semester,
+                // A level chosen by hand is never overwritten.
+                levelId: cls.levelId ?? detectedLevel?.id ?? null,
               },
             });
             classesUpdated++;
@@ -114,10 +125,13 @@ export async function POST(req: Request) {
                 program: group.program || null,
                 academicYear: group.academicYear || null,
                 semester: group.semester,
+                levelId: detectedLevel?.id ?? null,
               },
             });
             classesCreated++;
           }
+
+          groupLevels.set(group.sheetName, cls.levelId);
 
           const uniqueStudents = [
             ...new Map(
@@ -206,13 +220,22 @@ export async function POST(req: Request) {
         sheet: group.sheetName,
         className: group.name,
         students: group.students.length,
+        level: levelNames.get(groupLevels.get(group.sheetName) ?? "") ?? null,
       })),
-      warnings: groups
-        .filter((group) => group.students.length === 0)
-        .map(
-          (group) =>
-            `${group.sheetName}: classe créée, mais aucune identité étudiante n’est renseignée`,
-        ),
+      warnings: [
+        ...groups
+          .filter((group) => group.students.length === 0)
+          .map(
+            (group) =>
+              `${group.sheetName}: classe créée, mais aucune identité étudiante n’est renseignée`,
+          ),
+        ...groups
+          .filter((group) => !groupLevels.get(group.sheetName))
+          .map(
+            (group) =>
+              `${group.name} : niveau non détecté, choisissez-le dans « Gérer »`,
+          ),
+      ],
     });
   } catch (error) {
     const denied = authFailure(error);

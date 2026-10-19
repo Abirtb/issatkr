@@ -50,15 +50,14 @@ export async function findUsableToken(token: unknown) {
   return record;
 }
 
-// Has this account ever been activated through an invitation, or created with a
-// password? Decides whether a new link is an INVITE or a RESET.
+// An account still waiting for its first password gets an INVITE; any other
+// account gets a RESET.
 export async function linkPurposeFor(userId: string): Promise<TokenPurpose> {
-  const tokens = await prisma.accountToken.findMany({
-    where: { userId, purpose: "INVITE" },
-    select: { usedAt: true },
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { awaitingActivation: true },
   });
-  const neverActivated = tokens.length > 0 && tokens.every((token) => !token.usedAt);
-  return neverActivated ? "INVITE" : "RESET";
+  return user?.awaitingActivation ? "INVITE" : "RESET";
 }
 
 // Public base URL used in e-mailed links. APP_URL is authoritative in production
