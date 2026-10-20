@@ -1,4 +1,5 @@
-// Teachers may only take attendance during the first 90 minutes of a session.
+// Teachers may only take attendance during the session itself: from its start
+// to its end time. Without an end time, during the first 90 minutes.
 export const ATTENDANCE_WINDOW_MINUTES = 90;
 
 const DEFAULT_TIME_ZONE = process.env.ATTENDANCE_TIME_ZONE ?? "Africa/Tunis";
@@ -62,14 +63,17 @@ export function sessionStartsAt(
 export function getAttendanceWindow(
   date: Date,
   startTime: string,
+  endTime?: string | null,
   now = new Date(),
   timeZone = DEFAULT_TIME_ZONE,
 ): AttendanceWindow | null {
   const opensAt = sessionStartsAt(date, startTime, timeZone);
   if (!opensAt) return null;
-  const closesAt = new Date(
-    opensAt.getTime() + ATTENDANCE_WINDOW_MINUTES * 60_000,
-  );
+  const endsAt = endTime ? sessionStartsAt(date, endTime, timeZone) : null;
+  const closesAt =
+    endsAt && endsAt > opensAt
+      ? endsAt
+      : new Date(opensAt.getTime() + ATTENDANCE_WINDOW_MINUTES * 60_000);
   const state =
     now < opensAt ? "upcoming" : now > closesAt ? "closed" : "open";
   return { opensAt, closesAt, state };

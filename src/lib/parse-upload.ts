@@ -331,10 +331,25 @@ export function parseCinEmailWorkbook(buffer: ArrayBuffer): CinEmailRow[] {
 
 export type TeacherRow = {
   name: string;
+  // Empty when the list has no e-mail (it can be added by a later import).
   email: string;
   password: string;
   role: "ADMIN" | "DEPARTMENT_HEAD" | "PROF" | null;
+  grade: string;
 };
+
+// Same person whatever the case, accents, spacing or word order:
+// "ZIED Garbouj" = "Garbouj Zied".
+export function personKey(name: string) {
+  return name
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean)
+    .sort()
+    .join(" ");
+}
 
 function parseRole(raw: string): TeacherRow["role"] {
   const value = norm(raw);
@@ -355,12 +370,50 @@ export function parseTeacherRows(rows: Row[]): TeacherRow[] {
         email: pick(row, ["email", "e-mail", "mail", "adresse_email"]).toLowerCase(),
         password: pick(row, ["mot_de_passe", "password", "mdp"]),
         role: parseRole(pick(row, ["role", "rôle", "fonction"])),
+        grade: pick(row, ["grade", "statut", "corps", "qualite"]),
       };
     })
-    .filter((row) => row.email);
+    .filter((row) => row.name.trim().length >= 2 || row.email);
 }
 
-export type ReferenceRow = { line: number; code: string; name: string };
+const TEACHER_HEADERS = new Set(
+  ["nom", "prenom", "nom_complet", "nom_prenom", "name", "enseignant", "full_name", "email", "e-mail",
+    "mail", "adresse_email", "grade", "statut", "role", "fonction", "mot_de_passe", "password"].map(norm),
+);
+
+// Staff list as the administration exports it: either with a header row, or
+// without one (column A = name, then the grade; an e-mail may be in any column).
+export function parseTeacherWorkbook(buffer: ArrayBuffer): TeacherRow[] {
+  const workbook = readSpreadsheet(buffer);
+  const sheet = workbook.SheetNames.map((name) => workbook.Sheets[name]).find((item) => item?.["!ref"]);
+  if (!sheet) return [];
+  const rows = XLSX.utils
+    .sheet_to_json<unknown[]>(sheet, { header: 1, defval: "", blankrows: false, raw: false })
+    .slice(0, MAX_IMPORT_ROWS + 1);
+  const hasHeader = rows[0]?.some((cell) => TEACHER_HEADERS.has(norm(text(cell))));
+  if (hasHeader) {
+    return parseTeacherRows(XLSX.utils.sheet_to_json<Row>(sheet, { defval: "" }).slice(0, MAX_IMPORT_ROWS + 1));
+  }
+  return rows
+    .map((row) => {
+      const cells = row.map(text);
+      const email = cells.find((cell) => cell.includes("@")) ?? "";
+      const others = cells.filter((cell) => cell && cell !== email);
+      return {
+        name: others[0] ?? "",
+        email: email.toLowerCase(),
+        password: "",
+        role: null,
+        grade: others[1] ?? "",
+      };
+    })
+    .filter((row) => row.name.trim().length >= 2);
+}
+
+
+// level / specialty: optional, subjects only (programme: taught in that level
+// and spécialité; several lines with the same code add several programmes).
+export type ReferenceRow = { line: number; code: string; name: string; level: string; specialty: string };
 
 // Subjects / levels: one row per item, columns "code" and "libellé" (or variants).
 // `line` is the spreadsheet line (header = 1) for error messages.
@@ -371,6 +424,8 @@ export function parseReferenceRows(rows: Row[]): ReferenceRow[] {
       line: ((row as { __rowNum__?: number }).__rowNum__ ?? index + 1) + 1,
       code: pick(row, ["code", "code_matiere", "code_niveau", "sigle", "abreviation"]),
       name: pick(row, ["libelle", "nom", "name", "intitule", "designation", "matiere", "niveau"]),
+      level: pick(row, ["niveau", "level", "annee"]),
+      specialty: pick(row, ["specialite", "specialty", "filiere"]),
     }))
     .filter((row) => row.code || row.name);
 }

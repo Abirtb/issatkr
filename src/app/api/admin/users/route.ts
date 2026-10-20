@@ -7,30 +7,53 @@ import { audit } from "@/lib/security-log";
 import { unusablePassword } from "@/lib/account-tokens";
 
 const roleSchema = z.enum(["ADMIN", "DEPARTMENT_HEAD", "PROF"]);
-const createSchema = z.object({
-  name: z.string().trim().min(2).max(100),
-  email: z.string().trim().toLowerCase().email().max(200),
-  // Empty or absent: the account waits for an invitation, sent separately.
-  password: z.union([newPasswordField, z.literal("")]).optional(),
-  role: roleSchema,
-});
-const updateSchema = z.object({
-  id: z.string().min(1),
-  name: z.string().trim().min(2).max(100),
-  email: z.string().trim().toLowerCase().email().max(200),
-  role: roleSchema,
-  active: z.boolean(),
-  password: z.union([newPasswordField, z.literal("")]).optional(),
-});
+// Optional for teachers (added later, then the invitation); "" or null = none.
+const optionalEmail = z
+  .union([z.string().trim().toLowerCase().email().max(200), z.literal(""), z.null()])
+  .optional()
+  .transform((value) => value || null);
+const grade = z
+  .string()
+  .trim()
+  .max(80)
+  .nullable()
+  .optional()
+  .transform((value) => value || null);
+// Administrators always log in with an e-mail.
+const adminNeedsEmail = (value: { role: string; email: string | null }) =>
+  value.role !== "ADMIN" || Boolean(value.email);
+const adminEmailMessage = { message: "Un administrateur doit avoir une adresse e-mail" };
+const createSchema = z
+  .object({
+    name: z.string().trim().min(2).max(100),
+    email: optionalEmail,
+    grade,
+    // Empty or absent: the account waits for an invitation, sent separately.
+    password: z.union([newPasswordField, z.literal("")]).optional(),
+    role: roleSchema,
+  })
+  .refine(adminNeedsEmail, adminEmailMessage);
+const updateSchema = z
+  .object({
+    id: z.string().min(1),
+    name: z.string().trim().min(2).max(100),
+    email: optionalEmail,
+    grade,
+    role: roleSchema,
+    active: z.boolean(),
+    password: z.union([newPasswordField, z.literal("")]).optional(),
+  })
+  .refine(adminNeedsEmail, adminEmailMessage);
 
 const selection = {
   id: true,
   name: true,
   email: true,
+  grade: true,
   role: true,
   active: true,
   createdAt: true,
-  _count: { select: { taughtSessions: true } },
+  _count: { select: { taughtSessions: true, weeklySlots: true } },
 } as const;
 
 // For accounts without a password yet: "not_sent" (no invitation sent so far),
@@ -79,6 +102,7 @@ export async function POST(req: Request) {
       data: {
         name: input.name,
         email: input.email,
+        grade: input.grade,
         password: await hashPassword(input.password || unusablePassword()),
         role: input.role,
         awaitingActivation,
@@ -126,6 +150,7 @@ export async function PATCH(req: Request) {
       data: {
         name: input.name,
         email: input.email,
+        grade: input.grade,
         role: input.role,
         active: input.active,
         ...(input.password
@@ -150,12 +175,38 @@ export async function PATCH(req: Request) {
 export async function DELETE(req: Request) {
   try {
     const admin = await requireAdmin();
-    const id = new URL(req.url).searchParams.get("id");
+    const url = new URL(req.url);
+    const id = url.searchParams.get("id");
     if (!id || id === admin.id) {
       return NextResponse.json(
         { error: "Compte invalide" },
         { status: 400 },
       );
+    }
+    // ?permanent=1: really delete, only for an account with no history
+    // (an entry made by mistake, a duplicate). Otherwise: deactivate.
+    if (url.searchParams.get("permanent") === "1") {
+      const user = await prisma.user.findUnique({
+        where: { id },
+        select: {
+          _count: {
+            select: { taughtSessions: true, weeklySlots: true, attendanceAmendments: true },
+          },
+        },
+      });
+      if (!user) return NextResponse.json({ error: "Compte introuvable" }, { status: 404 });
+      const { taughtSessions, weeklySlots, attendanceAmendments } = user._count;
+      if (taughtSessions || weeklySlots || attendanceAmendments) {
+        return NextResponse.json(
+          {
+            error: `Suppression impossible : ce compte a un historique (${taughtSessions} séance(s), ${weeklySlots} cours hebdomadaire(s)). Désactivez-le plutôt.`,
+          },
+          { status: 409 },
+        );
+      }
+      await prisma.user.delete({ where: { id } });
+      await audit(admin, "user.delete", { type: "user", id }, undefined, req);
+      return NextResponse.json({ ok: true, deleted: true });
     }
     const result = await prisma.user.updateMany({
       where: { id },

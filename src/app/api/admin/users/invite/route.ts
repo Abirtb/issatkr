@@ -38,8 +38,11 @@ export async function POST(req: Request) {
       if (!user.active) {
         return NextResponse.json({ error: "Réactivez d’abord ce compte" }, { status: 400 });
       }
+      if (!user.email) {
+        return NextResponse.json({ error: "Ajoutez d’abord une adresse e-mail à ce compte" }, { status: 400 });
+      }
       const purpose = await linkPurposeFor(user.id);
-      const link = await createAndSendLink(req, user, purpose, admin.id);
+      const link = await createAndSendLink(req, { ...user, email: user.email }, purpose, admin.id);
       await audit(
         admin,
         purpose === "INVITE" ? "user.invite" : "user.password_link",
@@ -50,11 +53,13 @@ export async function POST(req: Request) {
       return NextResponse.json({ purpose, ...link });
     }
 
-    // Batch: one result per account; inactive accounts are skipped.
+    // Batch: one result per account; inactive accounts and accounts without
+    // e-mail are skipped.
     const results = [];
-    for (const user of users.filter((item) => item.active)) {
+    for (const user of users) {
+      if (!user.active || !user.email) continue;
       const purpose = await linkPurposeFor(user.id);
-      const link = await createAndSendLink(req, user, purpose, admin.id);
+      const link = await createAndSendLink(req, { ...user, email: user.email }, purpose, admin.id);
       results.push({ id: user.id, name: user.name, email: user.email, purpose, ...link });
     }
     await audit(admin, "user.invite_batch", { type: "user", id: null }, {

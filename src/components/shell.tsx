@@ -23,6 +23,7 @@ const profNav = [
 
 const adminNav = [
   { href: "/admin", label: "Tableau de bord" },
+  { href: "/admin/imports", label: "Imports" },
   { href: "/admin/classes", label: "Classes" },
   { href: "/admin/references", label: "Matières et niveaux" },
   { href: "/admin/users", label: "Utilisateurs" },

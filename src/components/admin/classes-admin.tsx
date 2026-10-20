@@ -3,8 +3,10 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
+import { FileDropZone } from "@/components/ui/file-drop-zone";
 import { Input } from "@/components/ui/input";
 import { useRevealOnOpen } from "@/lib/use-reveal";
+import { classParts } from "@/lib/class-name";
 import { maskCin } from "@/lib/student-fields";
 
 type ClassRow = {
@@ -64,6 +66,7 @@ export function AdminClasses() {
   const [yearFilter, setYearFilter] = useState("");
   const [semesterFilter, setSemesterFilter] = useState("");
   const [programFilter, setProgramFilter] = useState("");
+  const [specialtyFilter, setSpecialtyFilter] = useState("");
 
   async function load() {
     const response = await fetch("/api/admin/classes");
@@ -94,6 +97,8 @@ export function AdminClasses() {
   }, []);
 
   const years = [...new Set(classes.map((item) => item.academicYear).filter(Boolean))].sort().reverse() as string[];
+  // "1ENR1": 1st year, spécialité ENR, group 1 (read from the class name).
+  const specialties = [...new Set(classes.map((item) => classParts(item.name).specialty).filter(Boolean))].sort() as string[];
   const programs = [...new Set(classes.map((item) => item.program).filter(Boolean))].sort() as string[];
   const search = query.trim().toLowerCase();
   const filteredClasses = classes.filter(
@@ -106,9 +111,10 @@ export function AdminClasses() {
         (levelFilter === "aucun" ? !item.levelId : item.levelId === levelFilter)) &&
       (!yearFilter || item.academicYear === yearFilter) &&
       (!semesterFilter || String(item.semester ?? "") === semesterFilter) &&
-      (!programFilter || item.program === programFilter),
+      (!programFilter || item.program === programFilter) &&
+      (!specialtyFilter || classParts(item.name).specialty === specialtyFilter),
   );
-  const filtering = Boolean(search || levelFilter || yearFilter || semesterFilter || programFilter);
+  const filtering = Boolean(search || levelFilter || yearFilter || semesterFilter || programFilter || specialtyFilter);
 
   function resetFilters() {
     setQuery("");
@@ -116,6 +122,7 @@ export function AdminClasses() {
     setYearFilter("");
     setSemesterFilter("");
     setProgramFilter("");
+    setSpecialtyFilter("");
   }
 
   async function createClass(event: React.FormEvent) {
@@ -331,40 +338,22 @@ export function AdminClasses() {
             être importé seul, plus tard.
           </p>
           <div className="mt-4 grid gap-2 sm:grid-cols-2">
-            <label className="min-w-0 cursor-pointer">
-              <span className="block h-10 truncate rounded-lg border border-border px-3 text-sm leading-10">
-                {schoolFile
-                  ? `① ${schoolFile.name}`
-                  : "① Fichier scolarité (XLS / XLSX)"}
-              </span>
-              <input
-                type="file"
-                accept=".xls,.xlsx"
-                className="hidden"
-                disabled={importing}
-                onChange={(event) => {
-                  setSchoolFile(event.target.files?.[0] ?? null);
-                  event.target.value = "";
-                }}
-              />
-            </label>
-            <label className="min-w-0 cursor-pointer">
-              <span className="block h-10 truncate rounded-lg border border-border px-3 text-sm leading-10">
-                {emailsFile
-                  ? `② ${emailsFile.name}`
-                  : "② Fichier CIN + e-mail (facultatif)"}
-              </span>
-              <input
-                type="file"
-                accept=".csv,.xls,.xlsx"
-                className="hidden"
-                disabled={importing}
-                onChange={(event) => {
-                  setEmailsFile(event.target.files?.[0] ?? null);
-                  event.target.value = "";
-                }}
-              />
-            </label>
+            <FileDropZone
+              accept=".xls,.xlsx"
+              file={schoolFile}
+              onFile={setSchoolFile}
+              disabled={importing}
+              label="① Fichier scolarité"
+              hint="XLS, XLSX"
+            />
+            <FileDropZone
+              accept=".csv,.xls,.xlsx"
+              file={emailsFile}
+              onFile={setEmailsFile}
+              disabled={importing}
+              label="② CIN + e-mail (facultatif)"
+              hint="CSV, XLS, XLSX"
+            />
           </div>
           <div className="mt-3 flex flex-wrap gap-2">
             <Button
@@ -444,12 +433,12 @@ export function AdminClasses() {
       ) : null}
 
       {classes.length > 0 ? (
-        <div className="surface-card grid gap-2 rounded-xl p-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="surface-card grid gap-2 rounded-xl p-4 sm:grid-cols-2 lg:grid-cols-5">
           <Input
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             placeholder="Rechercher une classe…"
-            className="sm:col-span-2 lg:col-span-4"
+            className="sm:col-span-2 lg:col-span-5"
             aria-label="Rechercher une classe"
           />
           <select
@@ -465,6 +454,19 @@ export function AdminClasses() {
               </option>
             ))}
             <option value="aucun">Sans niveau</option>
+          </select>
+          <select
+            value={specialtyFilter}
+            onChange={(event) => setSpecialtyFilter(event.target.value)}
+            className="field-select"
+            aria-label="Filtrer par spécialité"
+          >
+            <option value="">Toutes les spécialités</option>
+            {specialties.map((specialty) => (
+              <option key={specialty} value={specialty}>
+                {specialty}
+              </option>
+            ))}
           </select>
           <select
             value={programFilter}
@@ -503,7 +505,7 @@ export function AdminClasses() {
             <option value="2">Semestre 2</option>
             <option value="3">Semestre 3</option>
           </select>
-          <div className="flex items-center gap-3 text-sm text-muted sm:col-span-2 lg:col-span-4">
+          <div className="flex items-center gap-3 text-sm text-muted sm:col-span-2 lg:col-span-5">
             <span>
               {filteredClasses.length} classe{filteredClasses.length > 1 ? "s" : ""}
               {filtering ? ` sur ${classes.length}` : ""} ·{" "}
@@ -548,6 +550,12 @@ export function AdminClasses() {
                 ) : null}
                 <p className="mt-1 text-xs text-muted">
                   Niveau : {item.level?.name ?? "non défini"}
+                  {classParts(item.name).specialty
+                    ? ` · Spécialité : ${classParts(item.name).specialty}`
+                    : ""}
+                  {classParts(item.name).group
+                    ? ` · Groupe ${classParts(item.name).group}`
+                    : ""}
                 </p>
               </div>
               <label className="cursor-pointer">

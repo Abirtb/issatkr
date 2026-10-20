@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { requireScheduleManager, authFailure } from "@/lib/auth";
 import { prisma } from "@/lib/db";
+import { dateKey, isDayOff, scheduleDate } from "@/lib/recurrence";
 import { audit } from "@/lib/security-log";
 
 const sessionSchema = z.object({
@@ -17,10 +18,29 @@ const sessionSchema = z.object({
   room: z.string().trim().max(80).optional(),
 });
 
-function scheduleDate(value: string) {
-  const date = new Date(`${value}T12:00:00`);
-  if (Number.isNaN(date.getTime())) throw new Error("INVALID_DATE");
-  return date;
+// A one-off session on a holiday is allowed (e.g. a make-up class), with a warning.
+async function dayOffWarning(date: string) {
+  const daysOff = await prisma.dayOff.findMany({
+    where: { startDate: { lte: scheduleDate(date) }, endDate: { gte: scheduleDate(date) } },
+  });
+  const ranges = daysOff.map((item) => ({ startDate: dateKey(item.startDate), endDate: dateKey(item.endDate) }));
+  return isDayOff(date, ranges) ? `Attention : ${daysOff[0].label} (jour non travaillé).` : null;
+}
+
+// Moving or deleting one occurrence of a weekly course: it must not come back
+// at the next re-generation.
+async function excludeOccurrence(weeklySlotId: string, date: Date) {
+  const slot = await prisma.weeklySlot.findUnique({
+    where: { id: weeklySlotId },
+    select: { excludedDates: true },
+  });
+  if (!slot) return;
+  const dates = new Set(slot.excludedDates.split(",").filter(Boolean));
+  dates.add(dateKey(date));
+  await prisma.weeklySlot.update({
+    where: { id: weeklySlotId },
+    data: { excludedDates: [...dates].sort().join(",") },
+  });
 }
 
 async function resolveReferences(input: z.infer<typeof sessionSchema>) {
@@ -47,16 +67,19 @@ export async function GET(req: Request) {
     const url = new URL(req.url);
     const from = url.searchParams.get("from");
     const to = url.searchParams.get("to");
+    const classId = url.searchParams.get("classId");
     const sessions = await prisma.session.findMany({
-      where:
-        from || to
+      where: {
+        ...(from || to
           ? {
               date: {
                 ...(from ? { gte: scheduleDate(from) } : {}),
                 ...(to ? { lte: scheduleDate(to) } : {}),
               },
             }
-          : undefined,
+          : {}),
+        ...(classId ? { classId } : {}),
+      },
       include: {
         class: { include: { level: true } },
         professor: { select: { id: true, name: true, email: true } },
@@ -98,7 +121,10 @@ export async function POST(req: Request) {
       professorId: session.professorId,
       selfAssigned: session.professorId === actor.id,
     }, req);
-    return NextResponse.json(session, { status: 201 });
+    return NextResponse.json(
+      { ...session, warning: await dayOffWarning(input.date) },
+      { status: 201 },
+    );
   } catch (error) {
     const denied = authFailure(error);
     if (denied) return denied;
@@ -118,9 +144,16 @@ export async function PATCH(req: Request) {
       return NextResponse.json({ error: "ID requis" }, { status: 400 });
     }
     const { subject } = await resolveReferences(input);
+    const before = await prisma.session.findUnique({
+      where: { id: input.id },
+      select: { weeklySlotId: true, date: true },
+    });
+    // An occurrence edited by hand leaves its weekly course (becomes one-off).
+    if (before?.weeklySlotId) await excludeOccurrence(before.weeklySlotId, before.date);
     const session = await prisma.session.update({
       where: { id: input.id },
       data: {
+        weeklySlotId: null,
         classId: input.classId,
         professorId: input.professorId,
         subjectId: input.subjectId,
@@ -137,7 +170,7 @@ export async function PATCH(req: Request) {
       professorId: session.professorId,
       selfAssigned: session.professorId === actor.id,
     }, req);
-    return NextResponse.json(session);
+    return NextResponse.json({ ...session, warning: await dayOffWarning(input.date) });
   } catch (error) {
     const denied = authFailure(error);
     if (denied) return denied;
@@ -159,7 +192,8 @@ export async function DELETE(req: Request) {
         { status: 409 },
       );
     }
-    await prisma.session.delete({ where: { id } });
+    const deleted = await prisma.session.delete({ where: { id } });
+    if (deleted.weeklySlotId) await excludeOccurrence(deleted.weeklySlotId, deleted.date);
     await audit(actor, "schedule.delete", { type: "session", id }, undefined, req);
     return NextResponse.json({ ok: true });
   } catch (error) {

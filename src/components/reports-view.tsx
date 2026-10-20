@@ -24,7 +24,7 @@ type ReportRow = {
   status: "NORMAL" | "WARNING" | "ELIMINATED";
 };
 
-export function ReportsView() {
+export function ReportsView({ canExportOfficial = false }: { canExportOfficial?: boolean }) {
   const [classes, setClasses] = useState<Ref[]>([]);
   const [subjects, setSubjects] = useState<Ref[]>([]);
   const [levels, setLevels] = useState<Ref[]>([]);
@@ -68,6 +68,15 @@ export function ReportsView() {
     void loadReport();
   }, [loadReport]);
 
+  // Official file (scolarité format, .xls), downloaded straight from the server.
+  function officialExportUrl(allClasses: boolean) {
+    const query = new URLSearchParams();
+    if (!allClasses && classId) query.set("classId", classId);
+    if (from) query.set("from", from);
+    if (to) query.set("to", to);
+    return `/api/admin/reports/absences?${query}`;
+  }
+
   function exportCsv() {
     const header =
       "Matricule;Nom;Prenom;Classe;Niveau;Matiere;Presences;Absences;Justifiees;Seuil;Statut\n";
@@ -105,14 +114,38 @@ export function ReportsView() {
             Calcul par étudiant, matière et niveau.
           </p>
         </div>
-        <Button
-          variant="secondary"
-          onClick={exportCsv}
-          disabled={!rows.length}
-        >
-          Exporter CSV
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          {canExportOfficial ? (
+            <>
+              <a
+                href={officialExportUrl(false)}
+                className="inline-flex h-10 items-center rounded-[10px] bg-gold px-4 text-sm font-medium text-navy-deep hover:brightness-105"
+              >
+                Fichier absences (classe)
+              </a>
+              <a
+                href={officialExportUrl(true)}
+                className="inline-flex h-10 items-center rounded-[10px] border border-border bg-surface px-4 text-sm font-medium hover:bg-surface-2"
+              >
+                Toutes les classes
+              </a>
+            </>
+          ) : null}
+          <Button
+            variant="secondary"
+            onClick={exportCsv}
+            disabled={!rows.length}
+          >
+            Exporter CSV
+          </Button>
+        </div>
       </div>
+      {canExportOfficial ? (
+        <p className="mt-2 text-xs text-muted">
+          Fichier absences : format scolarité (.xls), une ligne par étudiant et matière, absences non justifiées
+          sur la période choisie. « Identifiant EE » est à compléter (même valeur pour toute une matière).
+        </p>
+      ) : null}
 
       <div className="surface-card mt-5 grid gap-2 rounded-xl p-4 sm:grid-cols-2 lg:grid-cols-5">
         <select

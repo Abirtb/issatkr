@@ -62,6 +62,9 @@ export type AuditAction =
   | "user.create"
   | "user.update"
   | "user.deactivate"
+  | "user.delete"
+  | "subject.delete"
+  | "level.delete"
   | "users.import"
   | "attendance.amend"
   | "attendance.record"
@@ -76,6 +79,10 @@ export type AuditAction =
   | "schedule.update"
   | "schedule.delete"
   | "schedule.import"
+  | "schedule.period"
+  | "schedule.day_off"
+  | "schedule.weekly"
+  | "curriculum.update"
   | "subjects.import"
   | "levels.import";
 

@@ -6,10 +6,7 @@ import { canAccessSession } from "@/lib/access";
 import { z } from "zod";
 import { recalculateAlertsForStudents } from "@/lib/alerts";
 import { sendPendingNotifications } from "@/lib/mail";
-import {
-  ATTENDANCE_WINDOW_MINUTES,
-  getAttendanceWindow,
-} from "@/lib/attendance-window";
+import { getAttendanceWindow } from "@/lib/attendance-window";
 
 const marksSchema = z.object({
   marks: z
@@ -53,7 +50,7 @@ export async function GET(
       attendance: map[s.id] ?? null,
     }));
 
-    const window = getAttendanceWindow(session.date, session.startTime);
+    const window = getAttendanceWindow(session.date, session.startTime, session.endTime);
     return NextResponse.json({
       session,
       rows,
@@ -87,20 +84,20 @@ export async function PUT(
 
     const session = await prisma.session.findUnique({
       where: { id: sessionId },
-      select: { classId: true, subjectId: true, date: true, startTime: true },
+      select: { classId: true, subjectId: true, date: true, startTime: true, endTime: true },
     });
     if (!session) {
       return NextResponse.json({ error: "Introuvable" }, { status: 404 });
     }
     if (user.role !== "ADMIN") {
-      const window = getAttendanceWindow(session.date, session.startTime);
+      const window = getAttendanceWindow(session.date, session.startTime, session.endTime);
       if (window?.state !== "open") {
         return NextResponse.json(
           {
             error:
               window?.state === "upcoming"
                 ? "L’appel n’est pas encore ouvert pour cette séance."
-                : `L’appel est fermé (${ATTENDANCE_WINDOW_MINUTES} min après le début de la séance). Contactez l’administration.`,
+                : "L’appel est fermé : la séance est terminée. Contactez l’administration.",
           },
           { status: 409 },
         );

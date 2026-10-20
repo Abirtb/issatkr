@@ -2,7 +2,9 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { FileDropZone } from "@/components/ui/file-drop-zone";
 import { Input } from "@/components/ui/input";
+import { CurriculumAdmin } from "@/components/admin/curriculum-admin";
 import { useRevealOnOpen } from "@/lib/use-reveal";
 
 type ReferenceRow = {
@@ -11,16 +13,20 @@ type ReferenceRow = {
   name: string;
   active: boolean;
   _count: { sessions?: number; classes?: number };
+  // Subjects only: the programmes it belongs to.
+  curricula?: { id: string; specialty: string; level: { code: string } }[];
 };
 
 function ReferenceSection({
   title,
   endpoint,
   countLabel,
+  reloadKey = 0,
 }: {
   title: string;
   endpoint: "/api/admin/subjects" | "/api/admin/levels";
   countLabel: "sessions" | "classes";
+  reloadKey?: number;
 }) {
   const [rows, setRows] = useState<ReferenceRow[]>([]);
   const [code, setCode] = useState("");
@@ -38,7 +44,7 @@ function ReferenceSection({
 
   useEffect(() => {
     void load();
-  }, [load]);
+  }, [load, reloadKey]);
 
   async function create(event: React.FormEvent) {
     event.preventDefault();
@@ -93,6 +99,21 @@ function ReferenceSection({
     await load();
   }
 
+  async function remove(row: { id: string; code: string; name: string }) {
+    if (
+      !window.confirm(
+        `Supprimer définitivement « ${row.code} · ${row.name} » ?
+Impossible s’il est déjà utilisé : désactivez-le dans ce cas.`,
+      )
+    ) {
+      return;
+    }
+    const response = await fetch(`${endpoint}?id=${row.id}&permanent=1`, { method: "DELETE" });
+    const data = await response.json();
+    setMessage(response.ok ? `« ${row.code} » supprimé` : data.error);
+    if (response.ok) await load();
+  }
+
   async function deactivate(id: string) {
     const response = await fetch(`${endpoint}?id=${id}`, { method: "DELETE" });
     const data = await response.json();
@@ -120,25 +141,21 @@ function ReferenceSection({
         />
         <Button type="submit">Ajouter</Button>
       </form>
-      <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1">
-        <label className={importing ? "pointer-events-none opacity-60" : "cursor-pointer"}>
-          <span className="inline-flex h-10 items-center rounded-lg border border-border px-3 text-sm hover:bg-surface-2">
-            {importing ? "Import en cours…" : "Importer CSV / Excel"}
-          </span>
-          <input
-            type="file"
-            accept=".csv,.xlsx,.xls"
-            className="hidden"
-            disabled={importing}
-            onChange={(event) => {
-              const file = event.target.files?.[0];
-              if (file) void importFile(file);
-              event.target.value = "";
-            }}
-          />
-        </label>
-        <span className="text-xs text-muted">Colonnes : code, libellé</span>
-      </div>
+      <FileDropZone
+        className="mt-3"
+        accept=".csv,.xls,.xlsx"
+        file={null}
+        onFile={(file) => {
+          if (file) void importFile(file);
+        }}
+        disabled={importing}
+        label={importing ? "Import en cours…" : "Glissez un fichier CSV / Excel"}
+        hint={
+          endpoint === "/api/admin/subjects"
+            ? "import immédiat · code, libellé (+ niveau, spécialité)"
+            : "import immédiat · code, libellé"
+        }
+      />
       {message ? (
         <p className="mt-2 whitespace-pre-line text-xs text-muted">{message}</p>
       ) : null}
@@ -151,6 +168,11 @@ function ReferenceSection({
               </p>
               <p className="text-xs text-muted">
                 {row._count[countLabel] ?? 0} {countLabel}
+                {row.curricula?.length
+                  ? ` · ${row.curricula
+                      .map((entry) => `${entry.level.code}${entry.specialty ? ` ${entry.specialty}` : ""}`)
+                      .join(", ")}`
+                  : ""}
               </p>
             </div>
             <button
@@ -169,6 +191,13 @@ function ReferenceSection({
                 Désactiver
               </button>
             ) : null}
+            <button
+              type="button"
+              onClick={() => void remove(row)}
+              className="min-h-10 px-1 text-sm text-red-700 hover:underline"
+            >
+              Supprimer
+            </button>
           </div>
         ))}
       </div>
@@ -222,6 +251,8 @@ function ReferenceSection({
 }
 
 export function AdminReferences() {
+  // Saving a programme refreshes the programme tags of the subjects list.
+  const [reloadKey, setReloadKey] = useState(0);
   return (
     <div>
       <h1 className="text-2xl font-semibold">Matières et niveaux</h1>
@@ -233,12 +264,16 @@ export function AdminReferences() {
           title="Matières"
           endpoint="/api/admin/subjects"
           countLabel="sessions"
+          reloadKey={reloadKey}
         />
         <ReferenceSection
           title="Niveaux"
           endpoint="/api/admin/levels"
           countLabel="classes"
         />
+      </div>
+      <div className="mt-5">
+        <CurriculumAdmin onSaved={() => setReloadKey((value) => value + 1)} />
       </div>
     </div>
   );

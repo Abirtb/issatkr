@@ -1,12 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import * as XLSX from "xlsx";
+import { classParts } from "../src/lib/class-name";
 import {
   matchLevel,
   normalizeAcademicYear,
   normalizeCin,
   parseCinEmailWorkbook,
   parseEnrollmentWorkbook,
+  parseTeacherWorkbook,
+  personKey,
   parseTeacherRows,
   parseWorkbook,
 } from "../src/lib/parse-upload";
@@ -57,13 +60,13 @@ test("parses subjects/levels with accented or alternative headers, keeps line nu
   const csv = new TextEncoder().encode("code;libellé\nALGO;Algorithmique\n;\nBD;Bases de données\n");
   const rows = parseReferenceRows(parseWorkbook(csv.buffer as ArrayBuffer));
   assert.deepEqual(rows, [
-    { line: 2, code: "ALGO", name: "Algorithmique" },
-    { line: 4, code: "BD", name: "Bases de données" },
+    { line: 2, code: "ALGO", name: "Algorithmique", level: "", specialty: "" },
+    { line: 4, code: "BD", name: "Bases de données", level: "", specialty: "" },
   ]);
   const excel = parseReferenceRows(
     parseWorkbook(workbook([["Sigle", "Intitulé"], ["L1", "Licence 1"]])),
   );
-  assert.deepEqual(excel, [{ line: 2, code: "L1", name: "Licence 1" }]);
+  assert.deepEqual(excel, [{ line: 2, code: "L1", name: "Licence 1", level: "", specialty: "" }]);
 });
 
 test("scolarité export: parcours, year, semester and level number from the header", () => {
@@ -111,4 +114,65 @@ test("level detection: unique number, parcours family, explicit hint, otherwise 
   assert.equal(matchLevel([L1, M1, ING1], group(1, "Génie Energétique")), null);
   assert.equal(matchLevel([L1, M1], group(null, "", "Master 1"))?.id, "m1");
   assert.equal(matchLevel([L1, M1], group(null)), null);
+});
+
+test("staff list without header: name in A, grade in B, optional e-mail anywhere", () => {
+  const rows = parseTeacherWorkbook(
+    workbook([
+      ["AMMAR MARWA", "Maitre-assistant"],
+      ["Zied GARBOUJ", "Maitre-assistant", "Z.Garbouj@issatkr.tn"],
+      ["ABID Hasna", ""],
+      ["", ""],
+    ]),
+  );
+  assert.deepEqual(
+    rows.map(({ name, grade, email }) => ({ name, grade, email })),
+    [
+      { name: "AMMAR MARWA", grade: "Maitre-assistant", email: "" },
+      { name: "Zied GARBOUJ", grade: "Maitre-assistant", email: "z.garbouj@issatkr.tn" },
+      { name: "ABID Hasna", grade: "", email: "" },
+    ],
+  );
+});
+
+test("staff list with header still works, e-mail optional", () => {
+  const rows = parseTeacherWorkbook(
+    workbook([
+      ["Nom", "Prénom", "Grade", "Email"],
+      ["Ben Salah", "Mohamed", "PES", ""],
+    ]),
+  );
+  assert.equal(rows[0].name, "Mohamed Ben Salah");
+  assert.equal(rows[0].grade, "PES");
+  assert.equal(rows[0].email, "");
+});
+
+test("same person whatever the case, accents and word order", () => {
+  assert.equal(personKey("Zied GARBOUJ"), personKey("garbouj  zied"));
+  assert.equal(personKey("Hélà Zorgati"), personKey("ZORGATI Hela"));
+  assert.notEqual(personKey("Ali Hamdi"), personKey("Ali Hamdi Ben"));
+});
+
+test("class name: year of study, spécialité and group", () => {
+  assert.deepEqual(classParts("1ENR1"), { year: 1, specialty: "ENR", group: 1 });
+  assert.deepEqual(classParts("2INFO-3"), { year: 2, specialty: "INFO", group: 3 });
+  assert.deepEqual(classParts("ING1 INFO"), { year: null, specialty: null, group: null });
+});
+
+test("subjects file may list programmes: niveau and spécialité columns", async () => {
+  const { parseReferenceRows } = await import("../src/lib/parse-upload");
+  const rows = parseReferenceRows(
+    parseWorkbook(
+      workbook([
+        ["code", "libellé", "niveau", "spécialité"],
+        ["ALGO", "Algorithmique", "L1", "ENR"],
+        ["ALGO", "Algorithmique", "L2", "INFO"],
+        ["ANG", "Anglais", "L1", ""],
+      ]),
+    ),
+  );
+  assert.deepEqual(
+    rows.map(({ code, level, specialty }) => [code, level, specialty]),
+    [["ALGO", "L1", "ENR"], ["ALGO", "L2", "INFO"], ["ANG", "L1", ""]],
+  );
 });

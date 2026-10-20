@@ -49,16 +49,25 @@ export async function importReferences(req: Request, kind: Kind) {
 
     const errors: string[] = [];
     const byCode = new Map<string, string>();
+    // Subjects only: optional "niveau" + "spécialité" columns → programmes.
+    const programmes: { line: number; code: string; level: string; specialty: string }[] = [];
     for (const row of parsed) {
       const code = row.code.trim().toUpperCase();
       const name = row.name.trim();
       if (!code || code.length > 30) errors.push(`Ligne ${row.line} : code manquant ou trop long (30 max.)`);
       else if (name.length < 2 || name.length > NAME_MAX[kind]) {
         errors.push(`Ligne ${row.line} : libellé de 2 à ${NAME_MAX[kind]} caractères requis`);
-      } else byCode.set(code, name); // a repeated code: the last line wins
+      } else {
+        byCode.set(code, name); // a repeated code: the last line wins (for the label)
+        if (kind === "subjects" && row.level) {
+          programmes.push({ line: row.line, code, level: row.level, specialty: row.specialty });
+        }
+      }
     }
 
     const codes = [...byCode.keys()];
+    // Same code on several lines (only expected when listing programmes).
+    const duplicates = Math.max(0, parsed.length - errors.length - codes.length - programmes.length);
     const existing =
       kind === "subjects"
         ? await prisma.subject.findMany({ where: { code: { in: codes } }, select: { code: true } })
@@ -77,6 +86,41 @@ export async function importReferences(req: Request, kind: Kind) {
       }),
     );
 
+    let linked = 0;
+    if (programmes.length) {
+      const key = (value: string) =>
+        value.toLowerCase().normalize("NFD").replace(/\p{Diacritic}/gu, "").replace(/[^a-z0-9]/g, "");
+      const [levels, subjects] = await Promise.all([
+        prisma.academicLevel.findMany({ select: { id: true, code: true, name: true } }),
+        prisma.subject.findMany({ where: { code: { in: codes } }, select: { id: true, code: true } }),
+      ]);
+      const levelByKey = new Map<string, string>();
+      for (const level of levels) {
+        levelByKey.set(key(level.code), level.id);
+        levelByKey.set(key(level.name), level.id);
+      }
+      const subjectByCode = new Map(subjects.map((subject) => [subject.code, subject.id]));
+      for (const programme of programmes) {
+        const levelId = levelByKey.get(key(programme.level));
+        const specialty = programme.specialty.trim().toUpperCase();
+        if (!levelId) {
+          errors.push(`Ligne ${programme.line} : niveau inconnu « ${programme.level} »`);
+          continue;
+        }
+        if (!/^[A-ZÀ-Ÿ]{0,20}$/.test(specialty)) {
+          errors.push(`Ligne ${programme.line} : spécialité invalide « ${programme.specialty} »`);
+          continue;
+        }
+        const subjectId = subjectByCode.get(programme.code)!;
+        await prisma.subjectCurriculum.upsert({
+          where: { subjectId_levelId_specialty: { subjectId, levelId, specialty } },
+          create: { subjectId, levelId, specialty },
+          update: {},
+        });
+        linked++;
+      }
+    }
+
     const created = codes.filter((code) => !existingCodes.has(code)).length;
     const updated = codes.length - created;
     await audit(admin, kind === "subjects" ? "subjects.import" : "levels.import", { type: "workbook" }, {
@@ -87,7 +131,8 @@ export async function importReferences(req: Request, kind: Kind) {
     return NextResponse.json({
       created,
       updated,
-      duplicates: parsed.length - errors.length - codes.length,
+      duplicates,
+      linked,
       errors: errors.slice(0, 10),
       errorCount: errors.length,
     });

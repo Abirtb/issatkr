@@ -21,6 +21,8 @@ export async function GET() {
       prisma.subject.findMany({
         where: { active: true },
         orderBy: { name: "asc" },
+        // Programmes, to list a class's own subjects first.
+        include: { curricula: { select: { levelId: true, specialty: true } } },
       }),
     ]);
     return NextResponse.json({ classes, professors, subjects });

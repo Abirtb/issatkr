@@ -58,7 +58,7 @@ export async function POST(req: Request) {
       }),
     ]);
     await createSession(
-      { id: user.id, email: user.email, name: user.name, role: user.role },
+      { id: user.id, email: user.email ?? "", name: user.name, role: user.role },
       user.password,
       user.sessionVersion,
     );

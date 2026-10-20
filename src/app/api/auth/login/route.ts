@@ -44,7 +44,7 @@ export async function POST(req: Request) {
     }
     resetRateLimit(accountKey);
     await createSession(
-      { id: user.id, email: user.email, name: user.name, role: user.role },
+      { id: user.id, email: user.email ?? body.email, name: user.name, role: user.role },
       user.password,
       user.sessionVersion,
     );

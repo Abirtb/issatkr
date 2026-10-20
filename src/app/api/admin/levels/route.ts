@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { requireAdmin, authFailure } from "@/lib/auth";
 import { prisma } from "@/lib/db";
+import { audit } from "@/lib/security-log";
 
 const schema = z.object({
   id: z.string().min(1).optional(),
@@ -72,9 +73,33 @@ export async function PATCH(req: Request) {
 
 export async function DELETE(req: Request) {
   try {
-    await requireAdmin();
-    const id = new URL(req.url).searchParams.get("id");
+    const admin = await requireAdmin();
+    const url = new URL(req.url);
+    const id = url.searchParams.get("id");
     if (!id) return NextResponse.json({ error: "ID requis" }, { status: 400 });
+    // ?permanent=1: delete for good, only if no class uses it and no absence
+    // alert history depends on it. Otherwise: deactivate.
+    if (url.searchParams.get("permanent") === "1") {
+      const used = await prisma.academicLevel.findUnique({
+        where: { id },
+        select: { _count: { select: { classes: true, alertStates: true, notifications: true } } },
+      });
+      if (!used) return NextResponse.json({ error: "Niveau introuvable" }, { status: 404 });
+      const { classes, alertStates, notifications } = used._count;
+      if (classes || alertStates || notifications) {
+        return NextResponse.json(
+          {
+            error: classes
+              ? `Suppression impossible : ${classes} classe(s) utilisent ce niveau. Changez-leur de niveau ou désactivez-le.`
+              : "Suppression impossible : des alertes d’absence dépendent de ce niveau. Désactivez-le plutôt.",
+          },
+          { status: 409 },
+        );
+      }
+      await prisma.academicLevel.delete({ where: { id } });
+      await audit(admin, "level.delete", { type: "level", id }, undefined, req);
+      return NextResponse.json({ ok: true, deleted: true });
+    }
     await prisma.academicLevel.update({
       where: { id },
       data: { active: false },

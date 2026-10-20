@@ -66,7 +66,9 @@ export async function POST(req: Request) {
       select: { id: true, code: true, name: true },
     });
     const professorByEmail = new Map(
-      professors.map((professor) => [professor.email.toLowerCase(), professor]),
+      professors.flatMap((professor) =>
+        professor.email ? [[professor.email.toLowerCase(), professor] as const] : [],
+      ),
     );
 
     for (const e of entries) {

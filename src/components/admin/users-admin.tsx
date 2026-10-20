@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { FileDropZone } from "@/components/ui/file-drop-zone";
 import { Input } from "@/components/ui/input";
 import { csvRow } from "@/lib/csv";
 import { useRevealOnOpen } from "@/lib/use-reveal";
@@ -10,12 +11,32 @@ type Role = "ADMIN" | "DEPARTMENT_HEAD" | "PROF";
 type UserRow = {
   id: string;
   name: string;
-  email: string;
+  email: string | null;
+  grade: string | null;
   role: Role;
   active: boolean;
   invitation: "not_sent" | "pending" | "expired" | null;
-  _count: { taughtSessions: number };
+  _count: { taughtSessions: number; weeklySlots: number };
 };
+
+// List filter on the account state.
+const statusFilters = {
+  all: "Tous les statuts",
+  noEmail: "Sans e-mail",
+  toInvite: "À inviter",
+  pending: "Invitation envoyée",
+  active: "Actifs",
+  inactive: "Désactivés",
+} as const;
+type StatusFilter = keyof typeof statusFilters;
+
+function statusOf(user: UserRow): Exclude<StatusFilter, "all" | "toInvite"> | "toInvite" {
+  if (!user.active) return "inactive";
+  if (!user.email) return "noEmail";
+  if (user.invitation === "not_sent" || user.invitation === "expired") return "toInvite";
+  if (user.invitation === "pending") return "pending";
+  return "active";
+}
 
 // Link returned by the API only when it could not be e-mailed.
 type PendingLink = { name: string; email: string; link: string; expiresAt: string };
@@ -35,9 +56,14 @@ export function AdminUsers() {
   const [form, setForm] = useState({
     name: "",
     email: "",
+    grade: "",
     password: "",
     role: "PROF" as Role,
   });
+  const [query, setQuery] = useState("");
+  const [roleFilter, setRoleFilter] = useState("");
+  const [gradeFilter, setGradeFilter] = useState("");
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [editing, setEditing] = useState<
     (UserRow & { password?: string }) | null
   >(null);
@@ -75,7 +101,7 @@ export function AdminUsers() {
       setMessage(data.error ?? "Envoi impossible");
       return;
     }
-    keepUndelivered(user, data);
+    keepUndelivered({ name: user.name, email: user.email ?? "" }, data);
     setMessage(
       data.emailed
         ? `Lien envoyé par e-mail à ${user.email} (valable jusqu’au ${formatDate(data.expiresAt)}).`
@@ -84,9 +110,21 @@ export function AdminUsers() {
     await load();
   }
 
-  // Accounts that still need an invitation: never sent, or the link expired.
-  const toInvite = users.filter(
-    (user) => user.active && (user.invitation === "not_sent" || user.invitation === "expired"),
+  // Accounts that still need an invitation: never sent, or the link expired
+  // (and an e-mail to send it to).
+  const toInvite = users.filter((user) => statusOf(user) === "toInvite");
+  const withoutEmail = users.filter((user) => statusOf(user) === "noEmail").length;
+  const grades = [...new Set(users.map((user) => user.grade).filter(Boolean))].sort() as string[];
+  // Every word must appear, in any order: "abid dorra" finds "Dorra ABID".
+  const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const shownUsers = users.filter(
+    (user) =>
+      words.every((word) =>
+        `${user.name} ${user.email ?? ""} ${user.grade ?? ""}`.toLowerCase().includes(word),
+      ) &&
+      (!roleFilter || user.role === roleFilter) &&
+      (!gradeFilter || user.grade === gradeFilter) &&
+      (statusFilter === "all" || statusOf(user) === statusFilter),
   );
 
   async function sendAllInvitations() {
@@ -163,9 +201,11 @@ export function AdminUsers() {
     setMessage(
       form.password
         ? "Utilisateur créé avec le mot de passe saisi."
-        : `Compte créé pour ${data.user.name}. Aucun e-mail n’a été envoyé : cliquez sur « Envoyer l’invitation » quand vous êtes prêt.`,
+        : data.user.email
+          ? `Compte créé pour ${data.user.name}. Aucun e-mail n’a été envoyé : cliquez sur « Envoyer l’invitation » quand vous êtes prêt.`
+          : `Compte créé pour ${data.user.name}, sans e-mail : ajoutez-le (Modifier) avant d’envoyer l’invitation.`,
     );
-    setForm({ name: "", email: "", password: "", role: "PROF" });
+    setForm({ name: "", email: "", grade: "", password: "", role: "PROF" });
     await load();
   }
 
@@ -195,6 +235,20 @@ export function AdminUsers() {
     if (response.ok) await load();
   }
 
+  async function remove(user: UserRow) {
+    if (
+      !window.confirm(
+        `Supprimer définitivement ${user.name} ?\nÀ utiliser pour une erreur ou un doublon. Un compte avec des séances ne peut être que désactivé.`,
+      )
+    ) {
+      return;
+    }
+    const response = await fetch(`/api/admin/users?id=${user.id}&permanent=1`, { method: "DELETE" });
+    const data = await response.json();
+    setMessage(response.ok ? `${user.name} supprimé.` : data.error);
+    if (response.ok) await load();
+  }
+
   async function importTeachers(file: File) {
     setImporting(true);
     setMessage("");
@@ -213,6 +267,9 @@ export function AdminUsers() {
     setMessage(
       [
         `${data.created} comptes créés, ${data.updated} mis à jour.`,
+        data.withoutEmail
+          ? `${data.withoutEmail} enseignant(s) sans e-mail : complétez le fichier et réimportez-le, ou ajoutez l’e-mail avec « Modifier ».`
+          : "",
         data.awaitingInvitation
           ? `${data.awaitingInvitation} compte(s) sans mot de passe : aucune invitation n’a été envoyée. Utilisez « Envoyer les invitations » quand vous êtes prêt.`
           : "",
@@ -234,29 +291,23 @@ export function AdminUsers() {
       <div className="surface-card mt-6 rounded-xl border-l-4 border-l-gold p-4">
         <p className="font-semibold">Importer des enseignants (CSV / Excel)</p>
         <p className="mt-1 text-sm text-muted">
-          Colonnes : nom, prenom (ou nom_complet), email. Facultatif :
-          mot_de_passe, role (enseignant, chef, admin). Les comptes existants
-          sont mis à jour. Aucun e-mail n’est envoyé à l’import : les comptes
-          sans mot de passe sont invités ensuite, ensemble ou un par un.
+          La liste du personnel telle quelle : colonne A le nom, colonne B le
+          grade, une colonne e-mail facultative (ou des en-têtes nom, prenom,
+          email, grade, role). Réimportez la liste complétée plus tard : les
+          mêmes enseignants sont mis à jour (par e-mail, sinon par nom). Aucun
+          e-mail n’est envoyé à l’import.
         </p>
-        <div className="mt-3 flex flex-wrap gap-2">
-          <label className={importing ? "pointer-events-none opacity-60" : "cursor-pointer"}>
-            <span className="inline-flex h-10 items-center rounded-lg bg-gold px-4 text-sm font-medium text-navy-deep">
-              {importing ? "Import en cours…" : "Choisir un fichier CSV / XLSX"}
-            </span>
-            <input
-              type="file"
-              accept=".csv,.xls,.xlsx"
-              className="hidden"
-              disabled={importing}
-              onChange={(event) => {
-                const file = event.target.files?.[0];
-                if (file) void importTeachers(file);
-                event.target.value = "";
-              }}
-            />
-          </label>
-        </div>
+        <FileDropZone
+          className="mt-3"
+          accept=".csv,.xls,.xlsx"
+          file={null}
+          onFile={(file) => {
+            if (file) void importTeachers(file);
+          }}
+          disabled={importing}
+          label={importing ? "Import en cours…" : "Glissez la liste des enseignants ici"}
+          hint="import immédiat · CSV, XLS, XLSX"
+        />
       </div>
 
       <form
@@ -270,11 +321,15 @@ export function AdminUsers() {
           onChange={(event) => setForm({ ...form, name: event.target.value })}
         />
         <Input
-          required
           type="email"
-          placeholder="E-mail"
+          placeholder="E-mail (facultatif pour un enseignant)"
           value={form.email}
           onChange={(event) => setForm({ ...form, email: event.target.value })}
+        />
+        <Input
+          placeholder="Grade (facultatif) : Maître-assistant, vacataire…"
+          value={form.grade}
+          onChange={(event) => setForm({ ...form, grade: event.target.value })}
         />
         <Input
           minLength={8}
@@ -366,70 +421,126 @@ export function AdminUsers() {
         </div>
       ) : null}
 
-      <div className="mt-6 overflow-x-auto rounded-xl border border-border">
-        <table className="w-full min-w-[680px] text-sm">
+      <div className="surface-card mt-6 grid gap-2 rounded-xl p-4 sm:grid-cols-2 lg:grid-cols-4">
+        <Input
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder="Rechercher un nom, un e-mail…"
+          className="sm:col-span-2 lg:col-span-4"
+          aria-label="Rechercher un utilisateur"
+        />
+        <select value={roleFilter} onChange={(event) => setRoleFilter(event.target.value)} className="field-select" aria-label="Filtrer par rôle">
+          <option value="">Tous les rôles</option>
+          {Object.entries(roleLabels).map(([value, label]) => (
+            <option key={value} value={value}>{label}</option>
+          ))}
+        </select>
+        <select value={gradeFilter} onChange={(event) => setGradeFilter(event.target.value)} className="field-select" aria-label="Filtrer par grade">
+          <option value="">Tous les grades</option>
+          {grades.map((value) => (
+            <option key={value} value={value}>{value}</option>
+          ))}
+        </select>
+        <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as StatusFilter)} className="field-select" aria-label="Filtrer par statut">
+          {Object.entries(statusFilters).map(([value, label]) => (
+            <option key={value} value={value}>{label}</option>
+          ))}
+        </select>
+        <p className="self-center text-sm text-muted">
+          {shownUsers.length} sur {users.length}
+          {withoutEmail ? ` · ${withoutEmail} sans e-mail` : ""}
+        </p>
+      </div>
+
+      <div className="mt-4 overflow-x-auto rounded-xl border border-border">
+        <table className="w-full min-w-[760px] text-sm">
           <thead className="bg-surface-2 text-left text-muted">
             <tr>
               <th className="px-4 py-2">Utilisateur</th>
-              <th className="px-4 py-2">Rôle</th>
+              <th className="px-4 py-2">Rôle / grade</th>
               <th className="px-4 py-2">Séances</th>
               <th className="px-4 py-2">Statut</th>
               <th className="px-4 py-2 text-right">Actions</th>
             </tr>
           </thead>
           <tbody>
-            {users.map((user) => (
-              <tr key={user.id} className="border-t border-border">
-                <td className="px-4 py-3">
-                  {user.name}
-                  <span className="block text-xs text-muted">{user.email}</span>
-                </td>
-                <td className="px-4 py-3">{roleLabels[user.role]}</td>
-                <td className="px-4 py-3">{user._count.taughtSessions}</td>
-                <td className="px-4 py-3">
-                  {!user.active
-                    ? "Désactivé"
-                    : user.invitation === "not_sent"
-                      ? "Invitation non envoyée"
-                      : user.invitation === "pending"
-                        ? "Invitation envoyée"
-                        : user.invitation === "expired"
-                          ? "Invitation expirée"
-                          : "Actif"}
-                </td>
-                <td className="space-x-2 whitespace-nowrap px-4 py-2 text-right">
-                  <button
-                    type="button"
-                    onClick={() => setEditing({ ...user, password: "" })}
-                    className="min-h-9 px-1 text-navy hover:underline"
-                  >
-                    Modifier
-                  </button>
-                  {user.active ? (
+            {shownUsers.map((user) => {
+              const status = statusOf(user);
+              const deletable = user._count.taughtSessions === 0 && user._count.weeklySlots === 0;
+              return (
+                <tr key={user.id} className="border-t border-border">
+                  <td className="px-4 py-3">
+                    {user.name}
+                    <span className="block text-xs text-muted">{user.email ?? "Pas d’e-mail"}</span>
+                  </td>
+                  <td className="px-4 py-3">
+                    {roleLabels[user.role]}
+                    {user.grade ? <span className="block text-xs text-muted">{user.grade}</span> : null}
+                  </td>
+                  <td className="px-4 py-3">{user._count.taughtSessions}</td>
+                  <td className="px-4 py-3">
+                    {status === "inactive"
+                      ? "Désactivé"
+                      : status === "noEmail"
+                        ? "E-mail manquant"
+                        : user.invitation === "not_sent"
+                          ? "Invitation non envoyée"
+                          : user.invitation === "pending"
+                            ? "Invitation envoyée"
+                            : user.invitation === "expired"
+                              ? "Invitation expirée"
+                              : "Actif"}
+                  </td>
+                  <td className="space-x-2 whitespace-nowrap px-4 py-2 text-right">
                     <button
                       type="button"
-                      onClick={() => void sendLink(user)}
+                      onClick={() => setEditing({ ...user, password: "" })}
                       className="min-h-9 px-1 text-navy hover:underline"
                     >
-                      {user.invitation === "not_sent"
-                        ? "Envoyer l’invitation"
-                        : user.invitation
-                          ? "Renvoyer l’invitation"
-                          : "Envoyer un lien"}
+                      Modifier
                     </button>
-                  ) : null}
-                  {user.active ? (
-                    <button
-                      type="button"
-                      onClick={() => void deactivate(user.id)}
-                      className="min-h-9 px-1 text-red-700 hover:underline"
-                    >
-                      Désactiver
-                    </button>
-                  ) : null}
+                    {user.active && user.email ? (
+                      <button
+                        type="button"
+                        onClick={() => void sendLink(user)}
+                        className="min-h-9 px-1 text-navy hover:underline"
+                      >
+                        {user.invitation === "not_sent"
+                          ? "Envoyer l’invitation"
+                          : user.invitation
+                            ? "Renvoyer l’invitation"
+                            : "Envoyer un lien"}
+                      </button>
+                    ) : null}
+                    {user.active ? (
+                      <button
+                        type="button"
+                        onClick={() => void deactivate(user.id)}
+                        className="min-h-9 px-1 text-red-700 hover:underline"
+                      >
+                        Désactiver
+                      </button>
+                    ) : null}
+                    {deletable && user.role !== "ADMIN" ? (
+                      <button
+                        type="button"
+                        onClick={() => void remove(user)}
+                        className="min-h-9 px-1 text-red-700 hover:underline"
+                      >
+                        Supprimer
+                      </button>
+                    ) : null}
+                  </td>
+                </tr>
+              );
+            })}
+            {shownUsers.length === 0 ? (
+              <tr>
+                <td colSpan={5} className="px-4 py-8 text-center text-muted">
+                  Aucun utilisateur ne correspond à ces filtres.
                 </td>
               </tr>
-            ))}
+            ) : null}
           </tbody>
         </table>
       </div>
@@ -449,11 +560,18 @@ export function AdminUsers() {
             }
           />
           <Input
-            required
             type="email"
-            value={editing.email}
+            placeholder="E-mail (nécessaire pour inviter)"
+            value={editing.email ?? ""}
             onChange={(event) =>
               setEditing({ ...editing, email: event.target.value })
+            }
+          />
+          <Input
+            placeholder="Grade"
+            value={editing.grade ?? ""}
+            onChange={(event) =>
+              setEditing({ ...editing, grade: event.target.value })
             }
           />
           <select
