@@ -22,6 +22,8 @@ type ReportRow = {
   present: number;
   total: number;
   status: "NORMAL" | "WARNING" | "ELIMINATED";
+  // Dispensé (statut D): absences always 0.
+  exempt?: boolean;
 };
 
 export function ReportsView({ canExportOfficial = false }: { canExportOfficial?: boolean }) {
@@ -92,7 +94,7 @@ export function ReportsView({ canExportOfficial = false }: { canExportOfficial?:
         row.absences,
         row.justified,
         row.threshold,
-        row.status,
+        row.exempt ? "DISPENSE" : row.status,
       ]),
     );
     const blob = new Blob([`\uFEFF${header}${lines.join("\n")}`], {
@@ -233,11 +235,13 @@ export function ReportsView({ canExportOfficial = false }: { canExportOfficial?:
                 <td className="px-4 py-3">{row.justified}</td>
                 <td className="px-4 py-3">{row.threshold}</td>
                 <td className="px-4 py-3">
-                  {row.status === "ELIMINATED"
-                    ? "Éliminé"
-                    : row.status === "WARNING"
-                      ? "Avertissement"
-                      : "Normal"}
+                  {row.exempt
+                    ? "Dispensé (D)"
+                    : row.status === "ELIMINATED"
+                      ? "Éliminé"
+                      : row.status === "WARNING"
+                        ? "Avertissement"
+                        : "Normal"}
                 </td>
               </tr>
             ))}

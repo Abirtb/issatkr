@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { FileDropZone } from "@/components/ui/file-drop-zone";
 import { Input } from "@/components/ui/input";
 import { CurriculumAdmin } from "@/components/admin/curriculum-admin";
+import { ParcoursAdmin } from "@/components/admin/parcours-admin";
 import { useRevealOnOpen } from "@/lib/use-reveal";
 
 type ReferenceRow = {
@@ -271,6 +272,9 @@ export function AdminReferences() {
           endpoint="/api/admin/levels"
           countLabel="classes"
         />
+      </div>
+      <div className="mt-5">
+        <ParcoursAdmin onImported={() => setReloadKey((value) => value + 1)} />
       </div>
       <div className="mt-5">
         <CurriculumAdmin onSaved={() => setReloadKey((value) => value + 1)} />

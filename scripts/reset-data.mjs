@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Empties a database used for testing before going live: deletes every class,
-// student, session, attendance, timetable, subject, level, programme and
-// every NON-administrator account. Kept: administrator accounts, settings
+// student, session, attendance, timetable, subject, level, programme,
+// parcours (and its EE) and every NON-administrator account. Kept: administrator accounts, settings
 // (absence rules) and the audit log. Uploaded justificatifs are deleted too.
 //
 //   sudo bash scripts/as-service.sh node scripts/reset-data.mjs          # shows what would be deleted
@@ -28,8 +28,10 @@ const steps = [
   ["Semestres", prisma.academicPeriod],
   ["Jours fériés / vacances", prisma.dayOff],
   ["Programmes (matière × niveau)", prisma.subjectCurriculum],
+  ["Éléments d'enseignement (EE)", prisma.courseElement],
   ["Étudiants", prisma.student],
   ["Classes", prisma.class],
+  ["Parcours", prisma.parcours],
   ["Matières", prisma.subject],
   ["Niveaux", prisma.academicLevel],
   ["Liens d'invitation (non-admin)", prisma.accountToken, { user: notAdmin }],

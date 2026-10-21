@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireAdmin, authFailure } from "@/lib/auth";
 import { prisma } from "@/lib/db";
+import { isExempt } from "@/lib/student-status";
 import { throttleUser } from "@/lib/rate-limit";
 import { audit } from "@/lib/security-log";
 
@@ -21,6 +22,7 @@ export async function GET(
         lastName: true,
         matricule: true,
         email: true,
+        status: true,
         class: { select: { name: true, levelId: true, level: { select: { name: true } } } },
         attendances: {
           select: {
@@ -67,7 +69,8 @@ export async function GET(
       };
       if (attendance.present) summary.present++;
       else if (attendance.justification) summary.justified++;
-      else summary.absences++;
+      // Dispensé (statut D): his absences are not counted.
+      else if (!isExempt(student.status)) summary.absences++;
       summaries.set(subject.id, summary);
     }
     const thresholds = student.class.levelId

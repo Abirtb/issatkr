@@ -13,6 +13,8 @@ export type EnrollmentStudent = {
   lastNameAr: string;
   email: string;
   phone: string;
+  // "Statut" column (N, R, D…); D = dispensé d'assiduité.
+  status: string;
 };
 
 export type EnrollmentGroup = {
@@ -24,7 +26,8 @@ export type EnrollmentGroup = {
   academicYear: string;
   semester: number | null;
   // Level hints for matchLevel(): an explicit "Niveau" cell, else the year of
-  // study that starts the group name ("1ENR-1" → 1).
+  // study: from the semester (S1-S2 → 1, S3-S4 → 2…), else the number that
+  // starts the group name ("1ENR-1" → 1).
   levelHint: string;
   levelNumber: number | null;
   students: EnrollmentStudent[];
@@ -40,6 +43,28 @@ export function normalizeAcademicYear(raw: string) {
 }
 
 export type LevelOption = { id: string; code: string; name: string };
+
+// Two semesters per year of study: S1-S2 → 1, S3-S4 → 2, S5-S6 → 3.
+export function yearOfSemester(semester: number) {
+  return Math.ceil(semester / 2);
+}
+
+// Family of a level from the parcours wording; Licence when nothing says
+// otherwise (the "LI…" parcours of the institute).
+export function levelFamily(program: string) {
+  const text = norm(program);
+  if (/master|mastere/.test(text)) return { prefix: "M", label: "Master", pattern: /^(m|master)\d/ };
+  if (/ingenieur|cycleing/.test(text)) return { prefix: "ING", label: "Cycle ingénieur", pattern: /^(ing|ingenieur)\d/ };
+  if (/prepa|preparatoire/.test(text)) return { prefix: "PREPA", label: "Préparatoire", pattern: /^(prepa|cp)\d/ };
+  return { prefix: "L", label: "Licence", pattern: /^(l|lic|licence)\d/ };
+}
+
+// Level to create when none matches: "L1 · Licence 1", "M2 · Master 2"…
+export function newLevelFor(group: Pick<EnrollmentGroup, "levelNumber" | "program">) {
+  if (group.levelNumber == null) return null;
+  const family = levelFamily(group.program);
+  return { code: `${family.prefix}${group.levelNumber}`, name: `${family.label} ${group.levelNumber}` };
+}
 
 // Picks the academic level of an imported group, or null when it is not
 // certain (the admin then sets it by hand). Never guesses between families.
@@ -58,18 +83,9 @@ export function matchLevel(
   const candidates = levels.filter((level) => numberOf(level) === group.levelNumber);
   if (candidates.length <= 1) return candidates[0] ?? null;
 
-  // Several families share the number (L1, M1, ING1…): use the parcours wording.
-  const program = norm(group.program);
-  const family = /master|mastere/.test(program)
-    ? /^(m|master)\d/
-    : /ingenieur|cycleing/.test(program)
-      ? /^(ing|ingenieur)\d/
-      : /prepa|preparatoire/.test(program)
-        ? /^(prepa|cp)\d/
-        : /licence/.test(program)
-          ? /^(l|lic|licence)\d/
-          : null;
-  if (!family) return null;
+  // Several families share the number (L1, M1, ING1…): use the parcours
+  // wording (Licence when it says nothing else).
+  const family = levelFamily(group.program).pattern;
   const matches = candidates.filter((level) => family.test(norm(level.code)));
   return matches.length === 1 ? matches[0] : null;
 }
@@ -150,6 +166,7 @@ export function parseEnrollmentWorkbook(buffer: ArrayBuffer): EnrollmentGroup[] 
     const firstNameArColumn = column("Prénom Ar", "Prenom Ar");
     const emailColumn = column("Email", "E-mail");
     const phoneColumn = column("Telephone Portable", "Téléphone Portable");
+    const statusColumn = column("Statut");
 
     const name =
       findMetadata(metadataRows, "Nom Groupe") || sheetName.trim();
@@ -169,6 +186,7 @@ export function parseEnrollmentWorkbook(buffer: ArrayBuffer): EnrollmentGroup[] 
           lastNameAr,
           email: valueAt(row, emailColumn).toLowerCase(),
           phone: valueAt(row, phoneColumn),
+          status: valueAt(row, statusColumn).toUpperCase(),
         };
       })
       .filter(
@@ -187,7 +205,9 @@ export function parseEnrollmentWorkbook(buffer: ArrayBuffer): EnrollmentGroup[] 
         academicYear: normalizeAcademicYear(findMetadata(metadataRows, "Année")),
         semester: Number.isInteger(semesterRaw) ? semesterRaw : null,
         levelHint: findMetadata(metadataRows, "Niveau"),
-        levelNumber: Number(name.match(/^\s*(\d)/)?.[1] ?? NaN) || null,
+        levelNumber: Number.isInteger(semesterRaw) && semesterRaw > 0
+          ? yearOfSemester(semesterRaw)
+          : Number(name.match(/^\s*(\d)/)?.[1] ?? NaN) || null,
         students,
       },
     ];

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import type { Prisma } from "@prisma/client";
 import { requireAdmin, authFailure } from "@/lib/auth";
 import { prisma } from "@/lib/db";
+import { isExempt } from "@/lib/student-status";
 import { throttleUser } from "@/lib/rate-limit";
 import { audit } from "@/lib/security-log";
 import { z } from "zod";
@@ -72,11 +73,25 @@ export async function GET(req: Request) {
   }
 }
 
+function exemptRefusal() {
+  return NextResponse.json(
+    { error: "Étudiant dispensé (statut D) : il ne peut pas être marqué absent." },
+    { status: 409 },
+  );
+}
+
 export async function PATCH(req: Request) {
   try {
     const admin = await requireAdmin();
     const { id, present, justification } = patchSchema.parse(await req.json());
     const cleanJustification = justification?.trim();
+    if (present === false) {
+      const target = await prisma.attendance.findUnique({
+        where: { id },
+        select: { student: { select: { status: true } } },
+      });
+      if (isExempt(target?.student.status)) return exemptRefusal();
+    }
 
     const att = await prisma.attendance.update({
       where: { id },
@@ -118,7 +133,7 @@ export async function POST(req: Request) {
     const [student, session] = await Promise.all([
       prisma.student.findUnique({
         where: { id: studentId },
-        select: { classId: true, active: true },
+        select: { classId: true, active: true, status: true },
       }),
       prisma.session.findUnique({
         where: { id: sessionId },
@@ -136,6 +151,7 @@ export async function POST(req: Request) {
         { status: 400 },
       );
     }
+    if (!present && isExempt(student.status)) return exemptRefusal();
     const cleanJustification = justification?.trim() || null;
     const att = await prisma.attendance.upsert({
       where: { studentId_sessionId: { studentId, sessionId } },

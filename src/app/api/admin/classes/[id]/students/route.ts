@@ -3,6 +3,7 @@ import { z } from "zod";
 import { requireAdmin, authFailure } from "@/lib/auth";
 import { cinField, phoneField } from "@/lib/student-fields";
 import { prisma } from "@/lib/db";
+import { recalculateStudentSubjectAlert } from "@/lib/alerts";
 import { throttleUser } from "@/lib/rate-limit";
 import { audit, changedFields, logServerError } from "@/lib/security-log";
 import {
@@ -24,6 +25,15 @@ const studentSchema = z.object({
     .union([z.string().trim().email().max(200), z.literal(""), z.null()])
     .optional(),
   phone: phoneField,
+  // Scolarité "Statut" (N, R, D…); D = dispensé d'assiduité. "" = none.
+  status: z
+    .string()
+    .trim()
+    .max(5)
+    .regex(/^[A-Za-z]*$/, "Statut : lettres uniquement")
+    .transform((value) => value.toUpperCase() || null)
+    .nullable()
+    .optional(),
   classId: z.string().min(1).optional(),
 });
 
@@ -70,6 +80,7 @@ export async function POST(
           lastNameAr: student.lastNameAr || null,
           email: student.email || null,
           phone: student.phone || null,
+          status: student.status ?? null,
           classId: id,
         },
       });
@@ -208,8 +219,20 @@ export async function PATCH(
         lastNameAr: student.lastNameAr || null,
         email: student.email || null,
         phone: student.phone || null,
+        ...(student.status !== undefined ? { status: student.status } : {}),
       },
     });
+    // Dispensé or not: the absence count changes, so do the alerts.
+    if ((existing.status ?? null) !== (updated.status ?? null)) {
+      const subjects = await prisma.session.findMany({
+        where: { attendances: { some: { studentId: updated.id } }, subjectId: { not: null } },
+        select: { subjectId: true },
+        distinct: ["subjectId"],
+      });
+      for (const { subjectId } of subjects) {
+        await recalculateStudentSubjectAlert(updated.id, subjectId!);
+      }
+    }
     // Field names only (e.g. "cin"), never the old or new values.
     await audit(admin, "student.update", { type: "student", id: updated.id }, {
       fields: changedFields(existing, updated),

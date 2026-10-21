@@ -9,8 +9,11 @@ import { CalendarPanel, type DayOff, type Period } from "@/components/schedule/c
 import { classParts } from "@/lib/class-name";
 
 type Option = { id: string; name: string; code?: string; email?: string };
-type ClassOption = Option & { levelId: string | null };
-type SubjectOption = Option & { curricula: { levelId: string; specialty: string }[] };
+type ClassOption = Option & { levelId: string | null; parcoursId: string | null; semester: number | null };
+type SubjectOption = Option & {
+  curricula: { levelId: string; specialty: string }[];
+  elements: { parcoursId: string; semester: number }[];
+};
 type ScheduleRow = {
   id: string;
   classId: string;
@@ -272,16 +275,23 @@ export function ScheduleManager() {
   }
 
   const selectClass = "h-10 rounded-lg border border-border bg-surface px-3 text-sm";
-  // The selected class's programme (level + spécialité from "1ENR1") first.
+  // The selected class's own subjects first: the EE of its parcours for its
+  // semester, and its programme (level + spécialité from "1ENR1").
   const selectedClass = classes.find((item) => item.id === form.classId);
   const classSpecialty = selectedClass ? classParts(selectedClass.name).specialty ?? "" : "";
   const inProgramme = (subject: SubjectOption) =>
-    Boolean(selectedClass?.levelId) &&
-    subject.curricula.some(
-      (entry) =>
-        entry.levelId === selectedClass?.levelId &&
-        (entry.specialty === "" || entry.specialty === classSpecialty),
-    );
+    (Boolean(selectedClass?.parcoursId) &&
+      subject.elements.some(
+        (element) =>
+          element.parcoursId === selectedClass?.parcoursId &&
+          (!selectedClass?.semester || element.semester === selectedClass.semester),
+      )) ||
+    (Boolean(selectedClass?.levelId) &&
+      subject.curricula.some(
+        (entry) =>
+          entry.levelId === selectedClass?.levelId &&
+          (entry.specialty === "" || entry.specialty === classSpecialty),
+      ));
   const programmeSubjects = subjects.filter(inProgramme);
   const otherSubjects = subjects.filter((subject) => !inProgramme(subject));
   const weeklyShown = weekly.filter((slot) => !classFilter || slot.classId === classFilter);

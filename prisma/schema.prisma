@@ -84,6 +84,7 @@ model Subject {
   sessions      Session[]
   weeklySlots   WeeklySlot[]
   curricula     SubjectCurriculum[]
+  elements      CourseElement[]
   thresholds    AbsenceThreshold[]
   alertStates   AlertState[]
   notifications NotificationLog[]
@@ -98,6 +99,9 @@ model Class {
   academicYear String?
   semester     Int?
   levelId      String?
+  // Official parcours (LI574498), linked from the scolarité "Parcours" text.
+  parcoursId   String?
+  parcours     Parcours?      @relation(fields: [parcoursId], references: [id], onDelete: SetNull)
   level        AcademicLevel? @relation(fields: [levelId], references: [id], onDelete: SetNull)
   createdAt    DateTime       @default(now())
   updatedAt    DateTime       @default(now()) @updatedAt
@@ -106,6 +110,7 @@ model Class {
   weeklySlots  WeeklySlot[]
 
   @@index([levelId])
+  @@index([parcoursId])
 }
 
 model Student {
@@ -118,6 +123,9 @@ model Student {
   lastNameAr    String?
   email         String?
   phone         String?
+  // "Statut" of the scolarité file (N, R, D…). D = dispensé: never absent,
+  // his absences always count 0.
+  status        String?
   active        Boolean           @default(true)
   classId       String
   class         Class             @relation(fields: [classId], references: [id], onDelete: Cascade)
@@ -339,4 +347,41 @@ model SubjectCurriculum {
 
   @@unique([subjectId, levelId, specialty])
   @@index([levelId, specialty])
+}
+
+// Official study programme (parcours) from the ministry list: "LI574498",
+// mention "Génie Energétique", spécialité "Tronc commun ( ISSAT Kairouan)".
+model Parcours {
+  id        String          @id @default(cuid())
+  code      String          @unique
+  domain    String          @default("")
+  mention   String          @default("")
+  specialty String          @default("")
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @default(now()) @updatedAt
+  elements  CourseElement[]
+  classes   Class[]
+}
+
+// Élément d'enseignement (EE) of a parcours: "661294111 Conception 1", S1,
+// with its hours. Its subject (code = EE code) is what the timetable uses.
+model CourseElement {
+  id            String   @id @default(cuid())
+  code          String   @unique
+  parcoursId    String
+  parcours      Parcours @relation(fields: [parcoursId], references: [id], onDelete: Cascade)
+  subjectId     String
+  subject       Subject  @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  semester      Int
+  regime        String   @default("")
+  coefficient   Float    @default(0)
+  credits       Float    @default(0)
+  hoursLecture  Float    @default(0)
+  hoursTutorial Float    @default(0)
+  hoursLab      Float    @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @default(now()) @updatedAt
+
+  @@index([parcoursId, semester])
+  @@index([subjectId])
 }

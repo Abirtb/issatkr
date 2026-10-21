@@ -83,6 +83,8 @@ export type AuditAction =
   | "schedule.day_off"
   | "schedule.weekly"
   | "curriculum.update"
+  | "parcours.import"
+  | "parcours.delete"
   | "subjects.import"
   | "levels.import";
 

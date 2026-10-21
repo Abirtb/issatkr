@@ -22,7 +22,10 @@ export async function GET() {
         where: { active: true },
         orderBy: { name: "asc" },
         // Programmes, to list a class's own subjects first.
-        include: { curricula: { select: { levelId: true, specialty: true } } },
+        include: {
+          curricula: { select: { levelId: true, specialty: true } },
+          elements: { select: { parcoursId: true, semester: true } },
+        },
       }),
     ]);
     return NextResponse.json({ classes, professors, subjects });

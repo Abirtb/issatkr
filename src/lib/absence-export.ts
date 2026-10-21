@@ -1,10 +1,11 @@
 import { classParts } from "./class-name";
 import { prisma } from "./db";
+import { countedStudent } from "./student-status";
 
 // Official absence file (same columns as the scolarité template): one row per
-// student and subject (EE) of each group. "Identifiant EE" is not known by the
-// app and stays empty; "Identifiant Groupe" is filled when the class came from
-// the scolarité import. Absences = unjustified absences, as everywhere else.
+// student and subject (EE) of each group. "Identifiant EE" comes from the
+// class's parcours (imported EE list), "Identifiant Groupe" from the scolarité
+// import; both stay empty when unknown. Absences = unjustified absences.
 export const ABSENCE_EXPORT_HEADER = [
   "Année",
   "Identifiant Groupe",
@@ -33,6 +34,8 @@ export async function buildAbsenceExport(filters: { classId?: string; from?: Dat
       externalId: true,
       academicYear: true,
       levelId: true,
+      parcoursId: true,
+      semester: true,
       students: {
         where: { active: true },
         orderBy: [{ lastName: "asc" }, { firstName: "asc" }],
@@ -52,17 +55,23 @@ export async function buildAbsenceExport(filters: { classId?: string; from?: Dat
     filters.from || filters.to
       ? { date: { ...(filters.from ? { gte: filters.from } : {}), ...(filters.to ? { lte: filters.to } : {}) } }
       : {};
-  const [sessions, curricula] = await Promise.all([
+  const [sessions, curricula, elements] = await Promise.all([
     prisma.session.findMany({
       where: { classId: { in: classes.map((item) => item.id) }, subjectId: { not: null }, ...dateFilter },
       select: { classId: true, subjectId: true },
     }),
     prisma.subjectCurriculum.findMany({ select: { subjectId: true, levelId: true, specialty: true } }),
+    prisma.courseElement.findMany({
+      where: { parcoursId: { in: classes.map((item) => item.parcoursId).filter((id): id is string => Boolean(id)) } },
+      select: { code: true, parcoursId: true, subjectId: true, semester: true },
+    }),
   ]);
   const absences = await prisma.attendance.findMany({
     where: {
       present: false,
       justification: null,
+      // Dispensé (statut D): always 0.
+      student: countedStudent,
       session: { classId: { in: classes.map((item) => item.id) }, subjectId: { not: null }, ...dateFilter },
     },
     select: { studentId: true, session: { select: { subjectId: true } } },
@@ -88,6 +97,12 @@ export async function buildAbsenceExport(filters: { classId?: string; from?: Dat
         ids.add(entry.subjectId);
       }
     }
+    // EE of its parcours for its semester (every semester if not set).
+    for (const element of elements) {
+      if (element.parcoursId === cls.parcoursId && (!cls.semester || element.semester === cls.semester)) {
+        ids.add(element.subjectId);
+      }
+    }
     subjectsByClass.set(cls.id, ids);
     ids.forEach((id) => subjectIds.add(id));
   }
@@ -106,7 +121,7 @@ export async function buildAbsenceExport(filters: { classId?: string; from?: Dat
           academicStartYear(cls.academicYear),
           cls.externalId ?? "",
           cls.name,
-          "",
+          elements.find((element) => element.parcoursId === cls.parcoursId && element.subjectId === subject.id)?.code ?? "",
           subject.name,
           student.matricule,
           student.cin ?? "",

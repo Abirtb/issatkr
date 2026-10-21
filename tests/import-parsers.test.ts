@@ -4,6 +4,8 @@ import * as XLSX from "xlsx";
 import { classParts } from "../src/lib/class-name";
 import {
   matchLevel,
+  newLevelFor,
+  yearOfSemester,
   normalizeAcademicYear,
   normalizeCin,
   parseCinEmailWorkbook,
@@ -110,8 +112,8 @@ test("level detection: unique number, parcours family, explicit hint, otherwise 
   assert.equal(matchLevel([L1, M1, ING1], group(1, "Mastère de recherche"))?.id, "m1");
   assert.equal(matchLevel([L1, M1, ING1], group(1, "Cycle Ingénieur Informatique"))?.id, "i1");
   assert.equal(matchLevel([L1, M1, ING1], group(1, "Licence en Génie Energétique"))?.id, "l1");
-  // Several families and nothing in the parcours: no guess.
-  assert.equal(matchLevel([L1, M1, ING1], group(1, "Génie Energétique")), null);
+  // Several families and nothing in the parcours: Licence (the "LI…" parcours).
+  assert.equal(matchLevel([L1, M1, ING1], group(1, "Génie Energétique"))?.id, "l1");
   assert.equal(matchLevel([L1, M1], group(null, "", "Master 1"))?.id, "m1");
   assert.equal(matchLevel([L1, M1], group(null)), null);
 });
@@ -175,4 +177,26 @@ test("subjects file may list programmes: niveau and spécialité columns", async
     rows.map(({ code, level, specialty }) => [code, level, specialty]),
     [["ALGO", "L1", "ENR"], ["ALGO", "L2", "INFO"], ["ANG", "L1", ""]],
   );
+});
+
+test("level from the semester: S1-S2 → 1, S3-S4 → 2, S5-S6 → 3", () => {
+  assert.deepEqual([1, 2, 3, 4, 5, 6].map(yearOfSemester), [1, 1, 2, 2, 3, 3]);
+  const groups = parseEnrollmentWorkbook(
+    workbook([
+      ["Année:", "2025", "", "Semestre:", "3"],
+      ["Parcours", "Génie Energétique : Energies Renouvelables( ISSAT Kairouan)"],
+      ["Identifiant Groupe:", "25186099", "", "Nom Groupe:", "1ENR-1"],
+      ["N° Inscription", "Nom Fr", "Prénom Fr"],
+      ["25100001", "DHAOUADI", "Wiem"],
+    ]),
+  );
+  // The semester wins over the number in the group name.
+  assert.equal(groups[0].levelNumber, 2);
+});
+
+test("missing level is created in the parcours family", () => {
+  assert.deepEqual(newLevelFor({ levelNumber: 1, program: "Génie Energétique : Tronc commun" }), { code: "L1", name: "Licence 1" });
+  assert.deepEqual(newLevelFor({ levelNumber: 2, program: "Mastère de recherche en informatique" }), { code: "M2", name: "Master 2" });
+  assert.deepEqual(newLevelFor({ levelNumber: 3, program: "Cycle Ingénieur Informatique" }), { code: "ING3", name: "Cycle ingénieur 3" });
+  assert.equal(newLevelFor({ levelNumber: null, program: "" }), null);
 });

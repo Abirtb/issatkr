@@ -12,6 +12,7 @@ const classSchema = z.object({
   academicYear: z.string().trim().max(20).nullable().optional(),
   semester: z.coerce.number().int().min(1).max(3).nullable().optional(),
   levelId: z.string().min(1).nullable().optional(),
+  parcoursId: z.string().min(1).nullable().optional(),
 });
 
 export async function GET() {
@@ -21,6 +22,7 @@ export async function GET() {
       orderBy: { name: "asc" },
       include: {
         level: true,
+        parcours: { select: { id: true, code: true, mention: true, specialty: true } },
         _count: {
           select: {
             students: { where: { active: true } },
@@ -76,6 +78,7 @@ export async function PATCH(req: Request) {
         academicYear: input.academicYear || null,
         semester: input.semester ?? null,
         levelId: input.levelId ?? null,
+        parcoursId: input.parcoursId ?? null,
       },
     });
     await audit(admin, "class.update", { type: "class", id: cls.id }, undefined, req);

@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { useRevealOnOpen } from "@/lib/use-reveal";
 import { classParts } from "@/lib/class-name";
 import { maskCin } from "@/lib/student-fields";
+import { isExempt } from "@/lib/student-status";
 
 type ClassRow = {
   id: string;
@@ -19,6 +20,8 @@ type ClassRow = {
   semester: number | null;
   levelId: string | null;
   level: { id: string; code: string; name: string } | null;
+  parcoursId: string | null;
+  parcours: { id: string; code: string; mention: string; specialty: string } | null;
   _count: { students: number; sessions: number };
 };
 
@@ -30,6 +33,7 @@ type StudentRow = {
   lastName: string;
   email: string | null;
   phone: string | null;
+  status: string | null;
   classId?: string;
 };
 
@@ -40,7 +44,32 @@ const emptyStudent = {
   lastName: "",
   email: "",
   phone: "",
+  status: "",
 };
+
+// Statut of the scolarité file. D = dispensé: greyed out for the teacher,
+// never absent, 0 absence everywhere.
+const statusOptions = [
+  ["", "Statut non renseigné"],
+  ["N", "N"],
+  ["R", "R"],
+  ["D", "D · dispensé d’assiduité"],
+] as const;
+
+function StatusSelect({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+  const known = statusOptions.some(([code]) => code === value);
+  return (
+    <select value={value} onChange={(event) => onChange(event.target.value)} className="field-select" aria-label="Statut">
+      {statusOptions.map(([code, label]) => (
+        <option key={code} value={code}>
+          {label}
+        </option>
+      ))}
+      {/* Another code from the file stays selectable. */}
+      {!known && value ? <option value={value}>{value}</option> : null}
+    </select>
+  );
+}
 
 export function AdminClasses() {
   const [classes, setClasses] = useState<ClassRow[]>([]);
@@ -50,10 +79,13 @@ export function AdminClasses() {
   const [levels, setLevels] = useState<
     { id: string; code: string; name: string; active: boolean }[]
   >([]);
+  const [parcoursList, setParcoursList] = useState<{ id: string; code: string; mention: string; specialty: string }[]>([]);
   const [message, setMessage] = useState("");
   const [importing, setImporting] = useState(false);
   const [schoolFile, setSchoolFile] = useState<File | null>(null);
   const [emailsFile, setEmailsFile] = useState<File | null>(null);
+  // "" = automatic: level from the semester of the file (S1-S2 → 1, S3-S4 → 2…).
+  const [importLevelId, setImportLevelId] = useState("");
   const [openId, setOpenId] = useState<string | null>(null);
   const [students, setStudents] = useState<StudentRow[]>([]);
   const [studentForm, setStudentForm] = useState(emptyStudent);
@@ -85,6 +117,9 @@ export function AdminClasses() {
     const niveau = new URLSearchParams(window.location.search).get("niveau");
     if (niveau) setLevelFilter(niveau);
     void load();
+    fetch("/api/admin/parcours")
+      .then((response) => (response.ok ? response.json() : []))
+      .then(setParcoursList);
     fetch("/api/admin/levels")
       .then((response) => response.json())
       .then((data) => {
@@ -173,6 +208,7 @@ export function AdminClasses() {
       url = "/api/admin/classes/import";
       form.set("file", schoolFile);
       form.set("replace", "true");
+      if (importLevelId) form.set("levelId", importLevelId);
       if (emailsFile) form.set("emailsFile", emailsFile);
     } else if (emailsFile) {
       form.set("file", emailsFile);
@@ -191,6 +227,9 @@ export function AdminClasses() {
       );
       for (const group of data.groups ?? []) {
         if (group.level) lines.push(`${group.className} → niveau ${group.level}`);
+      }
+      if (data.levelsCreated?.length) {
+        lines.push(`Niveau(x) créé(s) automatiquement : ${data.levelsCreated.join(", ")}`);
       }
       if (data.emails) lines.push(...describeEmails(data.emails));
       if (data.warnings?.length) lines.push(...data.warnings);
@@ -330,9 +369,11 @@ export function AdminClasses() {
         <div className="surface-card rounded-xl border-l-4 border-l-gold p-5">
           <p className="font-semibold">Importer le fichier scolarité</p>
           <p className="mt-2 text-sm leading-6 text-muted">
-            ① Fichier scolarité : Année, Parcours, Nom Groupe et Identifiant
-            Groupe sont lus automatiquement. La liste officielle remplace les
-            étudiants actifs sans supprimer leur historique.
+            ① Fichier scolarité : Année, Semestre, Parcours, Nom Groupe et
+            Identifiant Groupe sont lus automatiquement ; le niveau vient du
+            semestre (S1-S2 → 1re année, S3-S4 → 2e…) et il est créé s’il
+            n’existe pas encore. La liste officielle remplace les étudiants
+            actifs sans supprimer leur historique.
             <br />② Fichier e-mails (facultatif) : colonnes CIN, Nom et E-mail.
             Les e-mails sont associés aux étudiants par leur CIN. Il peut aussi
             être importé seul, plus tard.
@@ -355,6 +396,23 @@ export function AdminClasses() {
               hint="CSV, XLS, XLSX"
             />
           </div>
+          <label className="mt-3 block text-sm">
+            <span className="mb-1 block text-muted">Niveau des classes importées</span>
+            <select
+              value={importLevelId}
+              onChange={(event) => setImportLevelId(event.target.value)}
+              className="field-select"
+              disabled={importing}
+              aria-label="Niveau des classes importées"
+            >
+              <option value="">Automatique, d’après le semestre (S1-S2 → 1re année, S3-S4 → 2e…)</option>
+              {levels.map((level) => (
+                <option key={level.id} value={level.id}>
+                  {level.code} · {level.name} (pour toutes les classes du fichier)
+                </option>
+              ))}
+            </select>
+          </label>
           <div className="mt-3 flex flex-wrap gap-2">
             <Button
               variant="gold"
@@ -541,15 +599,19 @@ export function AdminClasses() {
                   {item.code} · {item._count.students} étudiants ·{" "}
                   {item._count.sessions} séances
                 </p>
-                {item.program ? (
+                {item.program || item.parcours ? (
                   <p className="mt-1 truncate text-xs text-muted">
-                    {item.program}
+                    {/* The file may give only the code (LI574498): show the parcours name. */}
+                    {item.parcours
+                      ? [item.parcours.mention, item.parcours.specialty].filter(Boolean).join(" : ") || item.parcours.code
+                      : item.program}
                     {item.academicYear ? ` · ${item.academicYear}` : ""}
                     {item.semester ? ` · S${item.semester}` : ""}
                   </p>
                 ) : null}
                 <p className="mt-1 text-xs text-muted">
                   Niveau : {item.level?.name ?? "non défini"}
+                  {item.parcours ? ` · Parcours ${item.parcours.code}` : ""}
                   {classParts(item.name).specialty
                     ? ` · Spécialité : ${classParts(item.name).specialty}`
                     : ""}
@@ -658,6 +720,24 @@ export function AdminClasses() {
                       </option>
                     ))}
                   </select>
+                  <select
+                    value={classDraft.parcoursId ?? ""}
+                    onChange={(event) =>
+                      setClassDraft({
+                        ...classDraft,
+                        parcoursId: event.target.value || null,
+                      })
+                    }
+                    className="field-select"
+                    aria-label="Parcours"
+                  >
+                    <option value="">Parcours non défini</option>
+                    {parcoursList.map((item) => (
+                      <option key={item.id} value={item.id}>
+                        {item.code} · {item.mention} {item.specialty ? `: ${item.specialty}` : ""}
+                      </option>
+                    ))}
+                  </select>
                   <Button type="submit" size="sm">
                     Modifier la classe
                   </Button>
@@ -737,6 +817,10 @@ export function AdminClasses() {
                     }
                     placeholder="Téléphone"
                   />
+                  <StatusSelect
+                    value={studentForm.status}
+                    onChange={(status) => setStudentForm({ ...studentForm, status })}
+                  />
                   <Button type="submit" variant="gold" size="sm">
                     Ajouter étudiant
                   </Button>
@@ -751,6 +835,7 @@ export function AdminClasses() {
                         <th className="px-3 py-2">Prénom</th>
                         <th className="px-3 py-2">CIN</th>
                         <th className="px-3 py-2">E-mail</th>
+                        <th className="px-3 py-2">Statut</th>
                         <th className="px-3 py-2 text-right">Actions</th>
                       </tr>
                     </thead>
@@ -758,7 +843,7 @@ export function AdminClasses() {
                       {students.map((student) => (
                         <tr
                           key={student.id}
-                          className="border-t border-border"
+                          className={`border-t border-border ${isExempt(student.status) ? "bg-surface-2 text-muted" : ""}`}
                         >
                           <td className="px-3 py-2">{student.matricule}</td>
                           <td className="px-3 py-2">{student.lastName}</td>
@@ -768,6 +853,11 @@ export function AdminClasses() {
                           </td>
                           <td className="px-3 py-2 text-muted">
                             {student.email || "—"}
+                          </td>
+                          <td className="px-3 py-2">
+                            {isExempt(student.status)
+                              ? "D · dispensé"
+                              : student.status || "—"}
                           </td>
                           <td className="space-x-2 whitespace-nowrap px-3 py-1 text-right">
                             <Link
@@ -873,6 +963,12 @@ export function AdminClasses() {
                         })
                       }
                       placeholder="Téléphone"
+                    />
+                    <StatusSelect
+                      value={editingStudent.status ?? ""}
+                      onChange={(status) =>
+                        setEditingStudent({ ...editingStudent, status })
+                      }
                     />
                     <select
                       value={editingStudent.classId ?? openId ?? ""}

@@ -5,6 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
+import { isExempt } from "@/lib/student-status";
 
 type AttendanceWindow = {
   opensAt: string;
@@ -22,7 +23,7 @@ function formatDuration(ms: number) {
 }
 
 type Row = {
-  student: { id: string; firstName: string; lastName: string; matricule: string };
+  student: { id: string; firstName: string; lastName: string; matricule: string; status: string | null };
   attendance: { present: boolean } | null;
 };
 
@@ -51,7 +52,8 @@ export function TakeAttendance() {
         setRows(d.rows);
         const m: Record<string, boolean> = {};
         for (const row of d.rows) {
-          m[row.student.id] = row.attendance?.present ?? true;
+          // Dispensé (statut D): always present.
+          m[row.student.id] = isExempt(row.student.status) ? true : (row.attendance?.present ?? true);
         }
         setMarks(m);
       })
@@ -81,7 +83,7 @@ export function TakeAttendance() {
   const readOnly = loading || (!isAdmin && windowState !== "open");
 
   function setAll(present: boolean) {
-    setMarks(Object.fromEntries(rows.map((r) => [r.student.id, present])));
+    setMarks(Object.fromEntries(rows.map((r) => [r.student.id, isExempt(r.student.status) ? true : present])));
   }
 
   async function save() {
@@ -139,17 +141,31 @@ export function TakeAttendance() {
         <p className="mt-3 rounded-lg bg-surface-2 p-3 text-sm text-muted">
           L’appel ouvrira à l’heure de début de la séance (dans{" "}
           <span className="tabular-nums">{formatDuration(opensAt - serverNow)}</span>
-          ) et restera ouvert 1h30.
+          ) et restera ouvert jusqu’à la fin de la séance.
         </p>
       ) : (
         <p className="mt-3 rounded-lg bg-surface-2 p-3 text-sm text-muted">
-          L’appel est fermé (1h30 après le début de la séance). Seule
-          l’administration peut corriger le pointage.
+          L’appel est fermé : la séance est terminée. Seule l’administration
+          peut corriger le pointage.
         </p>
       )}
       {msg ? <p className="mt-2 text-sm text-gold">{msg}</p> : null}
       <div className="mt-4 space-y-2">
-        {rows.map((row) => (
+        {rows.map((row) =>
+          isExempt(row.student.status) ? (
+            // Dispensé (statut D): greyed out, cannot be marked absent.
+            <div key={row.student.id} className="surface-card flex items-center gap-3 rounded-xl p-3 opacity-60">
+              <div className="min-w-0 flex-1">
+                <p className="font-medium text-muted">
+                  {row.student.lastName} {row.student.firstName}
+                </p>
+                <p className="text-xs text-muted">{row.student.matricule}</p>
+              </div>
+              <span className="rounded-lg bg-surface-2 px-3 py-2 text-xs font-medium text-muted">
+                Dispensé (D) · non concerné
+              </span>
+            </div>
+          ) : (
           <div key={row.student.id} className="surface-card flex items-center gap-3 rounded-xl p-3">
             <div className="min-w-0 flex-1">
               <p className="font-medium">
@@ -182,7 +198,8 @@ export function TakeAttendance() {
               </button>
             </div>
           </div>
-        ))}
+          ),
+        )}
       </div>
       <div className="fixed right-0 bottom-0 left-0 z-10 border-t border-border bg-surface p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:static sm:mt-6 sm:border-0 sm:p-0">
         <Button onClick={save} disabled={saving || readOnly} className="w-full sm:w-auto">

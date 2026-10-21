@@ -7,6 +7,7 @@ import { z } from "zod";
 import { recalculateAlertsForStudents } from "@/lib/alerts";
 import { sendPendingNotifications } from "@/lib/mail";
 import { getAttendanceWindow } from "@/lib/attendance-window";
+import { isExempt } from "@/lib/student-status";
 
 const marksSchema = z.object({
   marks: z
@@ -40,7 +41,7 @@ export async function GET(
 
     const students = await prisma.student.findMany({
       where: { classId: session.classId, active: true },
-      select: { id: true, matricule: true, firstName: true, lastName: true },
+      select: { id: true, matricule: true, firstName: true, lastName: true, status: true },
       orderBy: [{ lastName: "asc" }, { firstName: "asc" }],
     });
 
@@ -105,15 +106,18 @@ export async function PUT(
     }
 
     const uniqueStudentIds = [...new Set(marks.map((mark) => mark.studentId))];
-    const validStudentCount = await prisma.student.count({
+    const validStudents = await prisma.student.findMany({
       where: {
         id: { in: uniqueStudentIds },
         classId: session.classId,
         active: true,
       },
+      select: { id: true, status: true },
     });
+    // Dispensé (statut D): always recorded present, whatever was sent.
+    const exempt = new Set(validStudents.filter((student) => isExempt(student.status)).map((student) => student.id));
     if (
-      validStudentCount !== uniqueStudentIds.length ||
+      validStudents.length !== uniqueStudentIds.length ||
       uniqueStudentIds.length !== marks.length
     ) {
       return NextResponse.json(
@@ -123,7 +127,9 @@ export async function PUT(
     }
 
     await prisma.$transaction([
-      ...marks.map((m) =>
+      ...marks
+        .map((m) => (exempt.has(m.studentId) ? { ...m, present: true } : m))
+        .map((m) =>
         prisma.attendance.upsert({
         where: {
           studentId_sessionId: { studentId: m.studentId, sessionId },
