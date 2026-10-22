@@ -13,12 +13,15 @@ export function createMailTransport() {
   }
   const host = process.env.SMTP_HOST;
   if (!host) throw new Error("SMTP_NOT_CONFIGURED");
+  const port = Number(process.env.SMTP_PORT || 587);
   return {
     from,
     transporter: nodemailer.createTransport({
       host,
-      port: Number(process.env.SMTP_PORT || 587),
-      secure: process.env.SMTP_SECURE === "true",
+      port,
+      // 465 is always TLS from the start, 587 always STARTTLS: a mismatched
+      // SMTP_SECURE only fails ("wrong version number"), so the port decides.
+      secure: port === 465 ? true : port === 587 ? false : process.env.SMTP_SECURE === "true",
       auth:
         process.env.SMTP_USER && process.env.SMTP_PASSWORD
           ? {
