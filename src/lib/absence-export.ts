@@ -19,6 +19,30 @@ export const ABSENCE_EXPORT_HEADER = [
   "Nombre d'absences",
 ] as const;
 
+type EeCandidate = { code: string; parcoursId: string; subjectId: string; name: string };
+const fold = (value: string) =>
+  value.toLowerCase().normalize("NFD").replace(/\p{Diacritic}/gu, "").replace(/[^a-z0-9]/g, "");
+
+// "Identifiant EE" of a subject for a class, most precise first:
+// 1. EE of the class's parcours for this subject;
+// 2. EE of the class's parcours with the same name ("Algèbre" created by hand);
+// 3. the subject's own EE when it has only one (class not linked yet);
+// 4. the subject code itself when it is an EE code (digits only).
+export function eeCodeFor(
+  cls: { parcoursId: string | null },
+  subject: { id: string; code: string; name: string },
+  candidates: EeCandidate[],
+) {
+  const inParcours = candidates.filter((item) => cls.parcoursId && item.parcoursId === cls.parcoursId);
+  const exact = inParcours.find((item) => item.subjectId === subject.id);
+  if (exact) return exact.code;
+  const byName = inParcours.filter((item) => fold(item.name) === fold(subject.name));
+  if (byName.length === 1) return byName[0].code;
+  const own = [...new Set(candidates.filter((item) => item.subjectId === subject.id).map((item) => item.code))];
+  if (own.length === 1) return own[0];
+  return /^\d{6,}$/.test(subject.code) ? subject.code : "";
+}
+
 // "2025-2026" → "2025" (the scolarité file writes the first year).
 export function academicStartYear(value: string | null) {
   return value?.match(/\d{4}/)?.[0] ?? "";
@@ -108,9 +132,16 @@ export async function buildAbsenceExport(filters: { classId?: string; from?: Dat
   }
   const subjects = await prisma.subject.findMany({
     where: { id: { in: [...subjectIds] } },
-    select: { id: true, name: true },
+    select: { id: true, code: true, name: true },
     orderBy: { name: "asc" },
   });
+  const parcoursIds = classes.map((item) => item.parcoursId).filter((id): id is string => Boolean(id));
+  const candidates: EeCandidate[] = (
+    await prisma.courseElement.findMany({
+      where: { OR: [{ parcoursId: { in: parcoursIds } }, { subjectId: { in: [...subjectIds] } }] },
+      select: { code: true, parcoursId: true, subjectId: true, subject: { select: { name: true } } },
+    })
+  ).map(({ subject, ...element }) => ({ ...element, name: subject.name }));
 
   const rows: (string | number)[][] = [];
   for (const cls of classes) {
@@ -121,7 +152,7 @@ export async function buildAbsenceExport(filters: { classId?: string; from?: Dat
           academicStartYear(cls.academicYear),
           cls.externalId ?? "",
           cls.name,
-          elements.find((element) => element.parcoursId === cls.parcoursId && element.subjectId === subject.id)?.code ?? "",
+          eeCodeFor(cls, subject, candidates),
           subject.name,
           student.matricule,
           student.cin ?? "",
