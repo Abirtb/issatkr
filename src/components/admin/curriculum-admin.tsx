@@ -15,7 +15,7 @@ const fold = (value: string) => value.toLowerCase().normalize("NFD").replace(/\p
 
 // Programme: tick the subjects taught for a level + spécialité ("1ENR1" →
 // L1 + ENR). "Toutes" (empty spécialité) = every spécialité of the level.
-export function CurriculumAdmin({ onSaved }: { onSaved?: () => void }) {
+export function CurriculumAdmin({ onSaved, reloadKey = 0 }: { onSaved?: () => void; reloadKey?: number }) {
   const [levels, setLevels] = useState<Level[]>([]);
   const [subjects, setSubjects] = useState<Subject[]>([]);
   const [specialties, setSpecialties] = useState<string[]>([]);
@@ -41,9 +41,10 @@ export function CurriculumAdmin({ onSaved }: { onSaved?: () => void }) {
     setLevelId((current) => current || data.levels[0]?.id || "");
   }, []);
 
+  // Reloaded after a parcours import, so the pre-filled ticks follow.
   useEffect(() => {
     void load();
-  }, [load]);
+  }, [load, reloadKey]);
 
   // The ticks follow the selected programme.
   useEffect(() => {

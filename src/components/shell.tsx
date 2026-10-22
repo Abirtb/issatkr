@@ -24,7 +24,7 @@ const profNav = [
 const adminNav = [
   { href: "/admin", label: "Tableau de bord" },
   { href: "/admin/classes", label: "Classes" },
-  { href: "/admin/references", label: "Matières et niveaux" },
+  { href: "/admin/references", label: "Parcours" },
   { href: "/admin/users", label: "Utilisateurs" },
   { href: "/schedule", label: "Emploi du temps" },
   { href: "/admin/attendance", label: "Absences" },

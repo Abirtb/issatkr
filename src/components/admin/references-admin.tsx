@@ -256,11 +256,17 @@ export function AdminReferences() {
   const [reloadKey, setReloadKey] = useState(0);
   return (
     <div>
-      <h1 className="text-2xl font-semibold">Matières et niveaux</h1>
+      <h1 className="text-2xl font-semibold">Parcours</h1>
       <p className="mt-1 text-sm text-muted">
-        Référentiels utilisés par les classes, séances et seuils.
+        Parcours et programmes d’abord, puis les matières et niveaux utilisés par les classes, séances et seuils.
       </p>
-      <div className="mt-6 grid gap-5 lg:grid-cols-2">
+      <div className="mt-6">
+        <ParcoursAdmin onImported={() => setReloadKey((value) => value + 1)} />
+      </div>
+      <div className="mt-5">
+        <CurriculumAdmin reloadKey={reloadKey} onSaved={() => setReloadKey((value) => value + 1)} />
+      </div>
+      <div className="mt-5 grid gap-5 lg:grid-cols-2">
         <ReferenceSection
           title="Matières"
           endpoint="/api/admin/subjects"
@@ -271,13 +277,8 @@ export function AdminReferences() {
           title="Niveaux"
           endpoint="/api/admin/levels"
           countLabel="classes"
+          reloadKey={reloadKey}
         />
-      </div>
-      <div className="mt-5">
-        <ParcoursAdmin onImported={() => setReloadKey((value) => value + 1)} />
-      </div>
-      <div className="mt-5">
-        <CurriculumAdmin onSaved={() => setReloadKey((value) => value + 1)} />
       </div>
     </div>
   );

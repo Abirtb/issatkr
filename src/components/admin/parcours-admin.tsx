@@ -95,7 +95,7 @@ export function ParcoursAdmin({ onImported }: { onImported?: () => void }) {
 
   return (
     <section className="surface-card rounded-xl p-5">
-      <h2 className="text-lg font-semibold">Parcours</h2>
+      <h2 className="text-lg font-semibold">Liste des parcours et EE</h2>
       <p className="mt-1 text-sm text-muted">
         Importez la liste des parcours (Code, Domaine, Mention, Spécialité), puis pour chaque parcours la liste
         de ses éléments d’enseignement (Code EE, Libellé, Rg, Coef, Crédit, TP, TD, Cours). Les EE deviennent des
