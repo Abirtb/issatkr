@@ -26,7 +26,11 @@ export async function GET(req: Request) {
     const [classes, subjects, levels] = await Promise.all([
       prisma.class.findMany({
         where: classScope(user),
-        include: { level: true },
+        include: {
+          level: true,
+          // Subjects planned for the class: the subject filter follows the class.
+          sessions: { select: { subjectId: true }, distinct: ["subjectId"] },
+        },
         orderBy: { name: "asc" },
       }),
       prisma.subject.findMany({
@@ -50,7 +54,15 @@ export async function GET(req: Request) {
           to: dateParam(search.get("to"), true),
         })
       : { rows: [], thresholds: [] };
-    return NextResponse.json({ classes, subjects, levels, ...report });
+    return NextResponse.json({
+      classes: classes.map(({ sessions, ...cls }) => ({
+        ...cls,
+        subjectIds: sessions.map((session) => session.subjectId).filter(Boolean),
+      })),
+      subjects,
+      levels,
+      ...report,
+    });
   } catch (error) {
     const denied = authFailure(error);
     if (denied) return denied;

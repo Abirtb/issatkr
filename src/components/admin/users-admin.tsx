@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { FileDropZone } from "@/components/ui/file-drop-zone";
 import { Input } from "@/components/ui/input";
 import { csvRow } from "@/lib/csv";
+import { applyFacets, facetOptions, type Facets } from "@/lib/facets";
 import { useRevealOnOpen } from "@/lib/use-reveal";
 
 type Role = "ADMIN" | "DEPARTMENT_HEAD" | "PROF";
@@ -114,18 +115,25 @@ export function AdminUsers() {
   // (and an e-mail to send it to).
   const toInvite = users.filter((user) => statusOf(user) === "toInvite");
   const withoutEmail = users.filter((user) => statusOf(user) === "noEmail").length;
-  const grades = [...new Set(users.map((user) => user.grade).filter(Boolean))].sort() as string[];
   // Every word must appear, in any order: "abid dorra" finds "Dorra ABID".
   const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
-  const shownUsers = users.filter(
-    (user) =>
-      words.every((word) =>
-        `${user.name} ${user.email ?? ""} ${user.grade ?? ""}`.toLowerCase().includes(word),
-      ) &&
-      (!roleFilter || user.role === roleFilter) &&
-      (!gradeFilter || user.grade === gradeFilter) &&
-      (statusFilter === "all" || statusOf(user) === statusFilter),
+  const searched = users.filter((user) =>
+    words.every((word) => `${user.name} ${user.email ?? ""} ${user.grade ?? ""}`.toLowerCase().includes(word)),
   );
+  // Cascading filters: each dropdown lists what the other filters leave.
+  const userFacets: Facets<UserRow> = {
+    role: (user) => user.role,
+    grade: (user) => user.grade,
+    status: (user) => statusOf(user),
+  };
+  const selectedFacets = {
+    role: roleFilter,
+    grade: gradeFilter,
+    status: statusFilter === "all" ? "" : statusFilter,
+  };
+  const shownUsers = applyFacets(searched, userFacets, selectedFacets);
+  const options = (key: keyof typeof selectedFacets) =>
+    facetOptions(searched, userFacets, selectedFacets, key);
 
   async function sendAllInvitations() {
     if (
@@ -431,20 +439,29 @@ export function AdminUsers() {
         />
         <select value={roleFilter} onChange={(event) => setRoleFilter(event.target.value)} className="field-select" aria-label="Filtrer par rôle">
           <option value="">Tous les rôles</option>
-          {Object.entries(roleLabels).map(([value, label]) => (
-            <option key={value} value={value}>{label}</option>
-          ))}
+          {Object.entries(roleLabels)
+            .filter(([value]) => options("role").has(value))
+            .map(([value, label]) => (
+              <option key={value} value={value}>{label} ({options("role").get(value)})</option>
+            ))}
         </select>
         <select value={gradeFilter} onChange={(event) => setGradeFilter(event.target.value)} className="field-select" aria-label="Filtrer par grade">
           <option value="">Tous les grades</option>
-          {grades.map((value) => (
-            <option key={value} value={value}>{value}</option>
-          ))}
+          {[...options("grade").entries()]
+            .sort(([a], [b]) => a.localeCompare(b))
+            .map(([value, count]) => (
+              <option key={value} value={value}>{value} ({count})</option>
+            ))}
         </select>
         <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as StatusFilter)} className="field-select" aria-label="Filtrer par statut">
-          {Object.entries(statusFilters).map(([value, label]) => (
-            <option key={value} value={value}>{label}</option>
-          ))}
+          {Object.entries(statusFilters)
+            .filter(([value]) => value === "all" || options("status").has(value))
+            .map(([value, label]) => (
+              <option key={value} value={value}>
+                {label}
+                {value === "all" ? "" : ` (${options("status").get(value)})`}
+              </option>
+            ))}
         </select>
         <p className="self-center text-sm text-muted">
           {shownUsers.length} sur {users.length}

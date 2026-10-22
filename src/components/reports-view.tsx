@@ -6,6 +6,8 @@ import { Input } from "@/components/ui/input";
 import { csvRow } from "@/lib/csv";
 
 type Ref = { id: string; code: string; name: string };
+// Class with its level and the subjects planned for it (cascading filters).
+type ClassRef = Ref & { levelId: string | null; subjectIds: string[] };
 type ReportRow = {
   student: {
     id: string;
@@ -27,7 +29,7 @@ type ReportRow = {
 };
 
 export function ReportsView({ canExportOfficial = false }: { canExportOfficial?: boolean }) {
-  const [classes, setClasses] = useState<Ref[]>([]);
+  const [classes, setClasses] = useState<ClassRef[]>([]);
   const [subjects, setSubjects] = useState<Ref[]>([]);
   const [levels, setLevels] = useState<Ref[]>([]);
   const [rows, setRows] = useState<ReportRow[]>([]);
@@ -69,6 +71,37 @@ export function ReportsView({ canExportOfficial = false }: { canExportOfficial?:
   useEffect(() => {
     void loadReport();
   }, [loadReport]);
+
+  // Cascading filters: level → its classes; class → its subjects; subject →
+  // the classes and levels where it is taught.
+  const classOptions = classes.filter(
+    (item) => (!levelId || item.levelId === levelId) && (!subjectId || item.subjectIds.includes(subjectId)),
+  );
+  const subjectScope = classId
+    ? classes.filter((item) => item.id === classId)
+    : classes.filter((item) => !levelId || item.levelId === levelId);
+  const subjectOptions = subjects.filter(
+    (subject) => subject.id === subjectId || subjectScope.some((item) => item.subjectIds.includes(subject.id)),
+  );
+  const levelOptions = levels.filter(
+    (level) =>
+      level.id === levelId ||
+      classes.some((item) => item.levelId === level.id && (!subjectId || item.subjectIds.includes(subjectId))),
+  );
+  // A report needs a class: keep one that fits the new filter.
+  function chooseLevel(value: string) {
+    setLevelId(value);
+    const current = classes.find((item) => item.id === classId);
+    if (value && current?.levelId !== value) {
+      setClassId(classes.find((item) => item.levelId === value)?.id ?? "");
+      setSubjectId("");
+    }
+  }
+  function chooseClass(value: string) {
+    setClassId(value);
+    const next = classes.find((item) => item.id === value);
+    if (subjectId && next && !next.subjectIds.includes(subjectId)) setSubjectId("");
+  }
 
   // Official file (scolarité format, .xls), downloaded straight from the server.
   function officialExportUrl(allClasses: boolean) {
@@ -152,11 +185,12 @@ export function ReportsView({ canExportOfficial = false }: { canExportOfficial?:
       <div className="surface-card mt-5 grid gap-2 rounded-xl p-4 sm:grid-cols-2 lg:grid-cols-5">
         <select
           value={classId}
-          onChange={(event) => setClassId(event.target.value)}
+          onChange={(event) => chooseClass(event.target.value)}
           className="h-10 rounded-lg border border-border bg-surface px-3 text-sm"
+          aria-label="Classe"
         >
           <option value="">Classe</option>
-          {classes.map((item) => (
+          {classOptions.map((item) => (
             <option key={item.id} value={item.id}>
               {item.name}
             </option>
@@ -168,7 +202,7 @@ export function ReportsView({ canExportOfficial = false }: { canExportOfficial?:
           className="h-10 rounded-lg border border-border bg-surface px-3 text-sm"
         >
           <option value="">Toutes les matières</option>
-          {subjects.map((item) => (
+          {subjectOptions.map((item) => (
             <option key={item.id} value={item.id}>
               {item.code} · {item.name}
             </option>
@@ -176,11 +210,12 @@ export function ReportsView({ canExportOfficial = false }: { canExportOfficial?:
         </select>
         <select
           value={levelId}
-          onChange={(event) => setLevelId(event.target.value)}
+          onChange={(event) => chooseLevel(event.target.value)}
           className="h-10 rounded-lg border border-border bg-surface px-3 text-sm"
+          aria-label="Niveau"
         >
           <option value="">Tous les niveaux</option>
-          {levels.map((item) => (
+          {levelOptions.map((item) => (
             <option key={item.id} value={item.id}>
               {item.name}
             </option>

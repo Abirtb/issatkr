@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { requireAdmin, authFailure } from "@/lib/auth";
 import { classParts } from "@/lib/class-name";
+import { autoProgrammes } from "@/lib/curriculum-auto";
 import { prisma } from "@/lib/db";
 import { audit } from "@/lib/security-log";
 
@@ -23,7 +24,7 @@ const putSchema = z.object({
 export async function GET() {
   try {
     await requireAdmin();
-    const [levels, subjects, classes, entries] = await Promise.all([
+    const [levels, subjects, classes, entries, parcours] = await Promise.all([
       prisma.academicLevel.findMany({
         where: { active: true },
         select: { id: true, code: true, name: true },
@@ -36,7 +37,19 @@ export async function GET() {
       }),
       prisma.class.findMany({ select: { name: true } }),
       prisma.subjectCurriculum.findMany({ select: { subjectId: true, levelId: true, specialty: true } }),
+      prisma.parcours.findMany({
+        select: {
+          code: true,
+          mention: true,
+          specialty: true,
+          classes: { select: { name: true } },
+          elements: { select: { subjectId: true, semester: true } },
+        },
+      }),
     ]);
+    // Pre-filled from the parcours files (EE semester → level): shown ticked,
+    // not stored; the manual entries are the extra subjects.
+    const auto = autoProgrammes(levels, parcours);
     const specialties = [
       ...new Set([
         ...classes.map((item) => classParts(item.name).specialty),
@@ -45,7 +58,7 @@ export async function GET() {
     ]
       .filter((value): value is string => Boolean(value))
       .sort();
-    return NextResponse.json({ levels, subjects, specialties, entries });
+    return NextResponse.json({ levels, subjects, specialties, entries, auto });
   } catch (error) {
     const denied = authFailure(error);
     if (denied) return denied;

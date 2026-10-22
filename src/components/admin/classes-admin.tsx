@@ -7,6 +7,7 @@ import { FileDropZone } from "@/components/ui/file-drop-zone";
 import { Input } from "@/components/ui/input";
 import { useRevealOnOpen } from "@/lib/use-reveal";
 import { classParts } from "@/lib/class-name";
+import { applyFacets, facetOptions, type Facets } from "@/lib/facets";
 import { maskCin } from "@/lib/student-fields";
 import { isExempt } from "@/lib/student-status";
 
@@ -131,24 +132,42 @@ export function AdminClasses() {
       });
   }, []);
 
-  const years = [...new Set(classes.map((item) => item.academicYear).filter(Boolean))].sort().reverse() as string[];
+  // Cascading filters: each dropdown only lists what the other filters leave.
   // "1ENR1": 1st year, spécialité ENR, group 1 (read from the class name).
-  const specialties = [...new Set(classes.map((item) => classParts(item.name).specialty).filter(Boolean))].sort() as string[];
-  const programs = [...new Set(classes.map((item) => item.program).filter(Boolean))].sort() as string[];
+  const classFacets: Facets<ClassRow> = {
+    level: (item) => item.levelId ?? "aucun",
+    specialty: (item) => classParts(item.name).specialty,
+    program: (item) => item.parcours?.code ?? item.program,
+    year: (item) => item.academicYear,
+    semester: (item) => (item.semester ? String(item.semester) : null),
+  };
+  const selectedFacets = {
+    level: levelFilter,
+    specialty: specialtyFilter,
+    program: programFilter,
+    year: yearFilter,
+    semester: semesterFilter,
+  };
   const search = query.trim().toLowerCase();
-  const filteredClasses = classes.filter(
+  const searched = classes.filter(
     (item) =>
-      (!search ||
-        [item.name, item.code, item.program ?? ""].some((value) =>
-          value.toLowerCase().includes(search),
-        )) &&
-      (!levelFilter ||
-        (levelFilter === "aucun" ? !item.levelId : item.levelId === levelFilter)) &&
-      (!yearFilter || item.academicYear === yearFilter) &&
-      (!semesterFilter || String(item.semester ?? "") === semesterFilter) &&
-      (!programFilter || item.program === programFilter) &&
-      (!specialtyFilter || classParts(item.name).specialty === specialtyFilter),
+      !search ||
+      [item.name, item.code, item.program ?? "", item.parcours?.code ?? ""].some((value) =>
+        value.toLowerCase().includes(search),
+      ),
   );
+  const filteredClasses = applyFacets(searched, classFacets, selectedFacets);
+  const options = (key: keyof typeof selectedFacets) =>
+    [...facetOptions(searched, classFacets, selectedFacets, key).entries()];
+  const levelLabel = (id: string) => {
+    if (id === "aucun") return "Sans niveau";
+    const level = levels.find((item) => item.id === id);
+    return level ? `${level.code} · ${level.name}` : "Niveau";
+  };
+  const programLabel = (value: string) => {
+    const parcours = classes.find((item) => item.parcours?.code === value)?.parcours;
+    return parcours ? `${parcours.code} · ${[parcours.mention, parcours.specialty].filter(Boolean).join(" : ")}` : value;
+  };
   const filtering = Boolean(search || levelFilter || yearFilter || semesterFilter || programFilter || specialtyFilter);
 
   function resetFilters() {
@@ -506,12 +525,13 @@ export function AdminClasses() {
             aria-label="Filtrer par niveau"
           >
             <option value="">Tous les niveaux</option>
-            {levels.map((level) => (
-              <option key={level.id} value={level.id}>
-                {level.code} · {level.name}
-              </option>
-            ))}
-            <option value="aucun">Sans niveau</option>
+            {options("level")
+              .sort(([a], [b]) => levelLabel(a).localeCompare(levelLabel(b)))
+              .map(([id, count]) => (
+                <option key={id} value={id}>
+                  {levelLabel(id)} ({count})
+                </option>
+              ))}
           </select>
           <select
             value={specialtyFilter}
@@ -520,11 +540,13 @@ export function AdminClasses() {
             aria-label="Filtrer par spécialité"
           >
             <option value="">Toutes les spécialités</option>
-            {specialties.map((specialty) => (
-              <option key={specialty} value={specialty}>
-                {specialty}
-              </option>
-            ))}
+            {options("specialty")
+              .sort(([a], [b]) => a.localeCompare(b))
+              .map(([specialty, count]) => (
+                <option key={specialty} value={specialty}>
+                  {specialty} ({count})
+                </option>
+              ))}
           </select>
           <select
             value={programFilter}
@@ -533,11 +555,13 @@ export function AdminClasses() {
             aria-label="Filtrer par parcours"
           >
             <option value="">Tous les parcours</option>
-            {programs.map((program) => (
-              <option key={program} value={program}>
-                {program}
-              </option>
-            ))}
+            {options("program")
+              .sort(([a], [b]) => a.localeCompare(b))
+              .map(([program, count]) => (
+                <option key={program} value={program}>
+                  {programLabel(program)} ({count})
+                </option>
+              ))}
           </select>
           <select
             value={yearFilter}
@@ -546,11 +570,13 @@ export function AdminClasses() {
             aria-label="Filtrer par année"
           >
             <option value="">Toutes les années</option>
-            {years.map((year) => (
-              <option key={year} value={year}>
-                {year}
-              </option>
-            ))}
+            {options("year")
+              .sort(([a], [b]) => b.localeCompare(a))
+              .map(([year, count]) => (
+                <option key={year} value={year}>
+                  {year} ({count})
+                </option>
+              ))}
           </select>
           <select
             value={semesterFilter}
@@ -559,9 +585,13 @@ export function AdminClasses() {
             aria-label="Filtrer par semestre"
           >
             <option value="">Tous les semestres</option>
-            <option value="1">Semestre 1</option>
-            <option value="2">Semestre 2</option>
-            <option value="3">Semestre 3</option>
+            {options("semester")
+              .sort(([a], [b]) => Number(a) - Number(b))
+              .map(([semester, count]) => (
+                <option key={semester} value={semester}>
+                  Semestre {semester} ({count})
+                </option>
+              ))}
           </select>
           <div className="flex items-center gap-3 text-sm text-muted sm:col-span-2 lg:col-span-5">
             <span>
