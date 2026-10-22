@@ -13,6 +13,8 @@ export type EnrollmentStudent = {
   lastNameAr: string;
   email: string;
   phone: string;
+  // "Statut" column (N, R, D…); D = dispensé d'assiduité.
+  status: string;
 };
 
 export type EnrollmentGroup = {
@@ -23,8 +25,70 @@ export type EnrollmentGroup = {
   program: string;
   academicYear: string;
   semester: number | null;
+  // Level hints for matchLevel(): an explicit "Niveau" cell, else the year of
+  // study: from the semester (S1-S2 → 1, S3-S4 → 2…), else the number that
+  // starts the group name ("1ENR-1" → 1).
+  levelHint: string;
+  levelNumber: number | null;
   students: EnrollmentStudent[];
 };
+
+// The scolarité export writes the academic year as its first calendar year
+// ("2025"); classes elsewhere use "2025-2026".
+export function normalizeAcademicYear(raw: string) {
+  const value = raw.trim();
+  if (/^\d{4}$/.test(value)) return `${value}-${Number(value) + 1}`;
+  const range = value.match(/^(\d{4})\s*[\/\-]\s*(\d{4})$/);
+  return range ? `${range[1]}-${range[2]}` : value;
+}
+
+export type LevelOption = { id: string; code: string; name: string };
+
+// Two semesters per year of study: S1-S2 → 1, S3-S4 → 2, S5-S6 → 3.
+export function yearOfSemester(semester: number) {
+  return Math.ceil(semester / 2);
+}
+
+// Family of a level from the parcours wording; Licence when nothing says
+// otherwise (the "LI…" parcours of the institute).
+export function levelFamily(program: string) {
+  const text = norm(program);
+  if (/master|mastere/.test(text)) return { prefix: "M", label: "Master", pattern: /^(m|master)\d/ };
+  if (/ingenieur|cycleing/.test(text)) return { prefix: "ING", label: "Cycle ingénieur", pattern: /^(ing|ingenieur)\d/ };
+  if (/prepa|preparatoire/.test(text)) return { prefix: "PREPA", label: "Préparatoire", pattern: /^(prepa|cp)\d/ };
+  return { prefix: "L", label: "Licence", pattern: /^(l|lic|licence)\d/ };
+}
+
+// Level to create when none matches: "L1 · Licence 1", "M2 · Master 2"…
+export function newLevelFor(group: Pick<EnrollmentGroup, "levelNumber" | "program">) {
+  if (group.levelNumber == null) return null;
+  const family = levelFamily(group.program);
+  return { code: `${family.prefix}${group.levelNumber}`, name: `${family.label} ${group.levelNumber}` };
+}
+
+// Picks the academic level of an imported group, or null when it is not
+// certain (the admin then sets it by hand). Never guesses between families.
+export function matchLevel(
+  levels: LevelOption[],
+  group: Pick<EnrollmentGroup, "levelHint" | "levelNumber" | "program">,
+): LevelOption | null {
+  if (group.levelHint) {
+    const hint = norm(group.levelHint);
+    const exact = levels.find((level) => norm(level.code) === hint || norm(level.name) === hint);
+    if (exact) return exact;
+  }
+  if (group.levelNumber == null) return null;
+  const numberOf = (level: LevelOption) =>
+    Number((level.code.match(/(\d+)\s*$/) ?? level.name.match(/(\d+)\s*$/))?.[1] ?? NaN);
+  const candidates = levels.filter((level) => numberOf(level) === group.levelNumber);
+  if (candidates.length <= 1) return candidates[0] ?? null;
+
+  // Several families share the number (L1, M1, ING1…): use the parcours
+  // wording (Licence when it says nothing else).
+  const family = levelFamily(group.program).pattern;
+  const matches = candidates.filter((level) => family.test(norm(level.code)));
+  return matches.length === 1 ? matches[0] : null;
+}
 
 function norm(s: string) {
   return s
@@ -102,6 +166,7 @@ export function parseEnrollmentWorkbook(buffer: ArrayBuffer): EnrollmentGroup[] 
     const firstNameArColumn = column("Prénom Ar", "Prenom Ar");
     const emailColumn = column("Email", "E-mail");
     const phoneColumn = column("Telephone Portable", "Téléphone Portable");
+    const statusColumn = column("Statut");
 
     const name =
       findMetadata(metadataRows, "Nom Groupe") || sheetName.trim();
@@ -121,6 +186,7 @@ export function parseEnrollmentWorkbook(buffer: ArrayBuffer): EnrollmentGroup[] 
           lastNameAr,
           email: valueAt(row, emailColumn).toLowerCase(),
           phone: valueAt(row, phoneColumn),
+          status: valueAt(row, statusColumn).toUpperCase(),
         };
       })
       .filter(
@@ -136,16 +202,38 @@ export function parseEnrollmentWorkbook(buffer: ArrayBuffer): EnrollmentGroup[] 
         code: name.toUpperCase().replace(/\s+/g, ""),
         externalId,
         program: findMetadata(metadataRows, "Parcours"),
-        academicYear: findMetadata(metadataRows, "Année"),
+        academicYear: normalizeAcademicYear(findMetadata(metadataRows, "Année")),
         semester: Number.isInteger(semesterRaw) ? semesterRaw : null,
+        levelHint: findMetadata(metadataRows, "Niveau"),
+        levelNumber: Number.isInteger(semesterRaw) && semesterRaw > 0
+          ? yearOfSemester(semesterRaw)
+          : Number(name.match(/^\s*(\d)/)?.[1] ?? NaN) || null,
         students,
       },
     ];
   });
 }
 
+// CSV files arrive as UTF-8 (with or without BOM) or as Windows-1252 when saved
+// by French Excel. Decode them explicitly so accents (é, è, ç) survive; binary
+// workbooks (XLSX = zip "PK", XLS = OLE D0 CF) are read as-is.
+function readSpreadsheet(buffer: ArrayBuffer) {
+  const bytes = new Uint8Array(buffer);
+  const isZip = bytes[0] === 0x50 && bytes[1] === 0x4b;
+  const isOle = bytes[0] === 0xd0 && bytes[1] === 0xcf;
+  if (isZip || isOle) return XLSX.read(buffer, { type: "array", cellDates: true });
+  let text: string;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    text = new TextDecoder("windows-1252").decode(bytes);
+  }
+  const withoutBom = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
+  return XLSX.read(withoutBom, { type: "string", cellDates: true });
+}
+
 export function parseWorkbook(buffer: ArrayBuffer): Row[] {
-  const wb = XLSX.read(buffer, { type: "array", cellDates: true });
+  const wb = readSpreadsheet(buffer);
   const sheet = wb.Sheets[wb.SheetNames[0]];
   if (!sheet) return [];
   return XLSX.utils
@@ -156,7 +244,8 @@ export function parseWorkbook(buffer: ArrayBuffer): Row[] {
 export function parseStudentsRows(rows: Row[]) {
   return rows
     .map((row) => ({
-      matricule: pick(row, ["matricule", "numero", "num_inscription", "id", "cin"]),
+      // Never fall back to the CIN: the matricule is shown to every teacher.
+      matricule: pick(row, ["matricule", "numero", "num_inscription", "id"]),
       firstName: pick(row, ["prenom", "firstname", "first_name", "nom_prenom"]),
       lastName: pick(row, ["nom", "lastname", "last_name", "nom_famille"]),
     }))
@@ -209,4 +298,154 @@ export function parseDate(raw: string): Date | null {
   }
   const d = new Date(s);
   return Number.isNaN(d.getTime()) ? null : d;
+}
+
+// CINs lose leading zeros when Excel stores them as numbers.
+export function normalizeCin(value: string) {
+  const compact = value.trim().toUpperCase().replace(/[\s.\-]/g, "");
+  return /^\d+$/.test(compact) ? compact.replace(/^0+/, "") : compact;
+}
+
+export type CinEmailRow = { cin: string; email: string; name: string };
+
+// Reads every sheet looking for a header row with a CIN column and an e-mail column.
+export function parseCinEmailWorkbook(buffer: ArrayBuffer): CinEmailRow[] {
+  const workbook = readSpreadsheet(buffer);
+  const result: CinEmailRow[] = [];
+  for (const sheetName of workbook.SheetNames) {
+    const sheet = workbook.Sheets[sheetName];
+    if (!sheet) continue;
+    const rows = XLSX.utils.sheet_to_json<unknown[]>(sheet, {
+      header: 1,
+      defval: "",
+      blankrows: false,
+      raw: false,
+    });
+    const headerIndex = rows.findIndex(
+      (row) =>
+        row.some((cell) => norm(text(cell)) === "cin") &&
+        row.some((cell) => norm(text(cell)).includes("mail")),
+    );
+    if (headerIndex < 0) continue;
+    const headers = rows[headerIndex].map((cell) => norm(text(cell)));
+    const cinColumn = headers.indexOf("cin");
+    const emailColumn = headers.findIndex((header) => header.includes("mail"));
+    const nameColumns = headers
+      .map((header, index) => ({ header, index }))
+      .filter(({ header }) => /^(nom|prenom|name)/.test(header))
+      .map(({ index }) => index);
+    for (const row of rows.slice(headerIndex + 1)) {
+      const cin = text(row[cinColumn]);
+      const email = text(row[emailColumn]).toLowerCase();
+      if (!cin || !email) continue;
+      result.push({
+        cin,
+        email,
+        name: nameColumns.map((index) => text(row[index])).filter(Boolean).join(" "),
+      });
+      if (result.length > MAX_IMPORT_ROWS) return result;
+    }
+  }
+  return result;
+}
+
+export type TeacherRow = {
+  name: string;
+  // Empty when the list has no e-mail (it can be added by a later import).
+  email: string;
+  password: string;
+  role: "ADMIN" | "DEPARTMENT_HEAD" | "PROF" | null;
+  grade: string;
+};
+
+// Same person whatever the case, accents, spacing or word order:
+// "ZIED Garbouj" = "Garbouj Zied".
+export function personKey(name: string) {
+  return name
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean)
+    .sort()
+    .join(" ");
+}
+
+function parseRole(raw: string): TeacherRow["role"] {
+  const value = norm(raw);
+  if (!value) return null;
+  if (value.startsWith("admin")) return "ADMIN";
+  if (value.includes("chef") || value.includes("head")) return "DEPARTMENT_HEAD";
+  return "PROF";
+}
+
+export function parseTeacherRows(rows: Row[]): TeacherRow[] {
+  return rows
+    .map((row) => {
+      const fullName = pick(row, ["nom_complet", "nom_prenom", "name", "enseignant", "full_name"]);
+      const lastName = pick(row, ["nom", "last_name", "lastname"]);
+      const firstName = pick(row, ["prenom", "first_name", "firstname"]);
+      return {
+        name: fullName || [firstName, lastName].filter(Boolean).join(" "),
+        email: pick(row, ["email", "e-mail", "mail", "adresse_email"]).toLowerCase(),
+        password: pick(row, ["mot_de_passe", "password", "mdp"]),
+        role: parseRole(pick(row, ["role", "rôle", "fonction"])),
+        grade: pick(row, ["grade", "statut", "corps", "qualite"]),
+      };
+    })
+    .filter((row) => row.name.trim().length >= 2 || row.email);
+}
+
+const TEACHER_HEADERS = new Set(
+  ["nom", "prenom", "nom_complet", "nom_prenom", "name", "enseignant", "full_name", "email", "e-mail",
+    "mail", "adresse_email", "grade", "statut", "role", "fonction", "mot_de_passe", "password"].map(norm),
+);
+
+// Staff list as the administration exports it: either with a header row, or
+// without one (column A = name, then the grade; an e-mail may be in any column).
+export function parseTeacherWorkbook(buffer: ArrayBuffer): TeacherRow[] {
+  const workbook = readSpreadsheet(buffer);
+  const sheet = workbook.SheetNames.map((name) => workbook.Sheets[name]).find((item) => item?.["!ref"]);
+  if (!sheet) return [];
+  const rows = XLSX.utils
+    .sheet_to_json<unknown[]>(sheet, { header: 1, defval: "", blankrows: false, raw: false })
+    .slice(0, MAX_IMPORT_ROWS + 1);
+  const hasHeader = rows[0]?.some((cell) => TEACHER_HEADERS.has(norm(text(cell))));
+  if (hasHeader) {
+    return parseTeacherRows(XLSX.utils.sheet_to_json<Row>(sheet, { defval: "" }).slice(0, MAX_IMPORT_ROWS + 1));
+  }
+  return rows
+    .map((row) => {
+      const cells = row.map(text);
+      const email = cells.find((cell) => cell.includes("@")) ?? "";
+      const others = cells.filter((cell) => cell && cell !== email);
+      return {
+        name: others[0] ?? "",
+        email: email.toLowerCase(),
+        password: "",
+        role: null,
+        grade: others[1] ?? "",
+      };
+    })
+    .filter((row) => row.name.trim().length >= 2);
+}
+
+
+// level / specialty: optional, subjects only (programme: taught in that level
+// and spécialité; several lines with the same code add several programmes).
+export type ReferenceRow = { line: number; code: string; name: string; level: string; specialty: string };
+
+// Subjects / levels: one row per item, columns "code" and "libellé" (or variants).
+// `line` is the spreadsheet line (header = 1) for error messages.
+export function parseReferenceRows(rows: Row[]): ReferenceRow[] {
+  return rows
+    .map((row, index) => ({
+      // SheetJS keeps the 0-based sheet row (header = 0) even when blank lines are skipped.
+      line: ((row as { __rowNum__?: number }).__rowNum__ ?? index + 1) + 1,
+      code: pick(row, ["code", "code_matiere", "code_niveau", "sigle", "abreviation"]),
+      name: pick(row, ["libelle", "nom", "name", "intitule", "designation", "matiere", "niveau"]),
+      level: pick(row, ["niveau", "level", "annee"]),
+      specialty: pick(row, ["specialite", "specialty", "filiere"]),
+    }))
+    .filter((row) => row.code || row.name);
 }

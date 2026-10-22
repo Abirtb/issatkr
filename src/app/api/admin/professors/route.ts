@@ -1,12 +1,13 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { requireAdmin, hashPassword } from "@/lib/auth";
+import { requireAdmin, hashPassword, authFailure } from "@/lib/auth";
 import { prisma } from "@/lib/db";
+import { newPasswordField } from "@/lib/password-policy";
 
 const professorSchema = z.object({
   name: z.string().trim().min(2).max(100),
   email: z.string().trim().toLowerCase().email().max(200),
-  password: z.string().min(8).max(100),
+  password: newPasswordField,
 });
 
 export async function GET() {
@@ -23,7 +24,9 @@ export async function GET() {
       orderBy: { name: "asc" },
     });
     return NextResponse.json(professors);
-  } catch {
+  } catch (error) {
+    const denied = authFailure(error);
+    if (denied) return denied;
     return NextResponse.json({ error: "Non autorisé" }, { status: 403 });
   }
 }
@@ -43,6 +46,8 @@ export async function POST(req: Request) {
     });
     return NextResponse.json(professor, { status: 201 });
   } catch (error) {
+    const denied = authFailure(error);
+    if (denied) return denied;
     const message =
       error instanceof z.ZodError
         ? error.issues[0]?.message

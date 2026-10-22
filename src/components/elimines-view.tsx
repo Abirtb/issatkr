@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 type Ref = { id: string; code: string; name: string };
+type ClassRef = Ref & { subjectIds: string[] };
 type EliminatedRow = {
   student: {
     id: string;
@@ -18,7 +19,7 @@ type EliminatedRow = {
 };
 
 export function EliminesView() {
-  const [classes, setClasses] = useState<Ref[]>([]);
+  const [classes, setClasses] = useState<ClassRef[]>([]);
   const [subjects, setSubjects] = useState<Ref[]>([]);
   const [classId, setClassId] = useState("");
   const [subjectId, setSubjectId] = useState("");
@@ -58,15 +59,22 @@ export function EliminesView() {
       <div className="mt-4 flex flex-wrap gap-2">
         <select
           value={classId}
-          onChange={(event) => setClassId(event.target.value)}
+          onChange={(event) => {
+            // Cascading: keep the subject only if the new class has it.
+            const next = classes.find((item) => item.id === event.target.value);
+            if (subjectId && next && !next.subjectIds.includes(subjectId)) setSubjectId("");
+            setClassId(event.target.value);
+          }}
           className="h-10 rounded-lg border border-border bg-surface px-3 text-sm"
         >
           <option value="">Toutes les classes autorisées</option>
-          {classes.map((item) => (
-            <option key={item.id} value={item.id}>
-              {item.name}
-            </option>
-          ))}
+          {classes
+            .filter((item) => item.id === classId || !subjectId || item.subjectIds.includes(subjectId))
+            .map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.name}
+              </option>
+            ))}
         </select>
         <select
           value={subjectId}
@@ -74,11 +82,19 @@ export function EliminesView() {
           className="h-10 rounded-lg border border-border bg-surface px-3 text-sm"
         >
           <option value="">Toutes les matières</option>
-          {subjects.map((item) => (
-            <option key={item.id} value={item.id}>
-              {item.code} · {item.name}
-            </option>
-          ))}
+          {subjects
+            .filter(
+              (item) =>
+                item.id === subjectId ||
+                classes.some(
+                  (cls) => (!classId || cls.id === classId) && cls.subjectIds.includes(item.id),
+                ),
+            )
+            .map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.code} · {item.name}
+              </option>
+            ))}
         </select>
       </div>
 

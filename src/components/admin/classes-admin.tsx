@@ -3,7 +3,13 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
+import { FileDropZone } from "@/components/ui/file-drop-zone";
 import { Input } from "@/components/ui/input";
+import { useRevealOnOpen } from "@/lib/use-reveal";
+import { classParts } from "@/lib/class-name";
+import { applyFacets, facetOptions, type Facets } from "@/lib/facets";
+import { maskCin } from "@/lib/student-fields";
+import { isExempt } from "@/lib/student-status";
 
 type ClassRow = {
   id: string;
@@ -15,6 +21,8 @@ type ClassRow = {
   semester: number | null;
   levelId: string | null;
   level: { id: string; code: string; name: string } | null;
+  parcoursId: string | null;
+  parcours: { id: string; code: string; mention: string; specialty: string } | null;
   _count: { students: number; sessions: number };
 };
 
@@ -26,6 +34,8 @@ type StudentRow = {
   lastName: string;
   email: string | null;
   phone: string | null;
+  status: string | null;
+  classId?: string;
 };
 
 const emptyStudent = {
@@ -35,7 +45,32 @@ const emptyStudent = {
   lastName: "",
   email: "",
   phone: "",
+  status: "",
 };
+
+// Statut of the scolarité file. D = dispensé: greyed out for the teacher,
+// never absent, 0 absence everywhere.
+const statusOptions = [
+  ["", "Statut non renseigné"],
+  ["N", "N"],
+  ["R", "R"],
+  ["D", "D · dispensé d’assiduité"],
+] as const;
+
+function StatusSelect({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+  const known = statusOptions.some(([code]) => code === value);
+  return (
+    <select value={value} onChange={(event) => onChange(event.target.value)} className="field-select" aria-label="Statut">
+      {statusOptions.map(([code, label]) => (
+        <option key={code} value={code}>
+          {label}
+        </option>
+      ))}
+      {/* Another code from the file stays selectable. */}
+      {!known && value ? <option value={value}>{value}</option> : null}
+    </select>
+  );
+}
 
 export function AdminClasses() {
   const [classes, setClasses] = useState<ClassRow[]>([]);
@@ -45,13 +80,26 @@ export function AdminClasses() {
   const [levels, setLevels] = useState<
     { id: string; code: string; name: string; active: boolean }[]
   >([]);
+  const [parcoursList, setParcoursList] = useState<{ id: string; code: string; mention: string; specialty: string }[]>([]);
   const [message, setMessage] = useState("");
   const [importing, setImporting] = useState(false);
+  const [schoolFile, setSchoolFile] = useState<File | null>(null);
+  const [emailsFile, setEmailsFile] = useState<File | null>(null);
+  // "" = automatic: level from the semester of the file (S1-S2 → 1, S3-S4 → 2…).
+  const [importLevelId, setImportLevelId] = useState("");
   const [openId, setOpenId] = useState<string | null>(null);
   const [students, setStudents] = useState<StudentRow[]>([]);
   const [studentForm, setStudentForm] = useState(emptyStudent);
   const [editingStudent, setEditingStudent] = useState<StudentRow | null>(null);
   const [classDraft, setClassDraft] = useState<ClassRow | null>(null);
+  const studentEditForm = useRevealOnOpen<HTMLFormElement>(editingStudent?.id);
+  // List filters. levelFilter: "" = all, "aucun" = no level, else a level id.
+  const [query, setQuery] = useState("");
+  const [levelFilter, setLevelFilter] = useState("");
+  const [yearFilter, setYearFilter] = useState("");
+  const [semesterFilter, setSemesterFilter] = useState("");
+  const [programFilter, setProgramFilter] = useState("");
+  const [specialtyFilter, setSpecialtyFilter] = useState("");
 
   async function load() {
     const response = await fetch("/api/admin/classes");
@@ -66,7 +114,13 @@ export function AdminClasses() {
   }
 
   useEffect(() => {
+    // The dashboard links here with ?niveau=aucun.
+    const niveau = new URLSearchParams(window.location.search).get("niveau");
+    if (niveau) setLevelFilter(niveau);
     void load();
+    fetch("/api/admin/parcours")
+      .then((response) => (response.ok ? response.json() : []))
+      .then(setParcoursList);
     fetch("/api/admin/levels")
       .then((response) => response.json())
       .then((data) => {
@@ -77,6 +131,53 @@ export function AdminClasses() {
         setNewLevelId(active[0]?.id ?? "");
       });
   }, []);
+
+  // Cascading filters: each dropdown only lists what the other filters leave.
+  // "1ENR1": 1st year, spécialité ENR, group 1 (read from the class name).
+  const classFacets: Facets<ClassRow> = {
+    level: (item) => item.levelId ?? "aucun",
+    specialty: (item) => classParts(item.name).specialty,
+    program: (item) => item.parcours?.code ?? item.program,
+    year: (item) => item.academicYear,
+    semester: (item) => (item.semester ? String(item.semester) : null),
+  };
+  const selectedFacets = {
+    level: levelFilter,
+    specialty: specialtyFilter,
+    program: programFilter,
+    year: yearFilter,
+    semester: semesterFilter,
+  };
+  const search = query.trim().toLowerCase();
+  const searched = classes.filter(
+    (item) =>
+      !search ||
+      [item.name, item.code, item.program ?? "", item.parcours?.code ?? ""].some((value) =>
+        value.toLowerCase().includes(search),
+      ),
+  );
+  const filteredClasses = applyFacets(searched, classFacets, selectedFacets);
+  const options = (key: keyof typeof selectedFacets) =>
+    [...facetOptions(searched, classFacets, selectedFacets, key).entries()];
+  const levelLabel = (id: string) => {
+    if (id === "aucun") return "Sans niveau";
+    const level = levels.find((item) => item.id === id);
+    return level ? `${level.code} · ${level.name}` : "Niveau";
+  };
+  const programLabel = (value: string) => {
+    const parcours = classes.find((item) => item.parcours?.code === value)?.parcours;
+    return parcours ? `${parcours.code} · ${[parcours.mention, parcours.specialty].filter(Boolean).join(" : ")}` : value;
+  };
+  const filtering = Boolean(search || levelFilter || yearFilter || semesterFilter || programFilter || specialtyFilter);
+
+  function resetFilters() {
+    setQuery("");
+    setLevelFilter("");
+    setYearFilter("");
+    setSemesterFilter("");
+    setProgramFilter("");
+    setSpecialtyFilter("");
+  }
 
   async function createClass(event: React.FormEvent) {
     event.preventDefault();
@@ -94,28 +195,69 @@ export function AdminClasses() {
     }
   }
 
-  async function importSchoolWorkbook(file: File) {
+  function describeEmails(emails: {
+    updated: number;
+    unchanged: number;
+    notFound: string[];
+    invalid: string[];
+  }) {
+    const lines = [
+      `E-mails : ${emails.updated} ajoutés/modifiés, ${emails.unchanged} déjà à jour`,
+    ];
+    if (emails.notFound.length) {
+      lines.push(
+        `CIN introuvables (${emails.notFound.length}) : ${emails.notFound.slice(0, 20).join(", ")}${emails.notFound.length > 20 ? "…" : ""}`,
+      );
+    }
+    if (emails.invalid.length) {
+      lines.push(
+        `E-mails invalides (${emails.invalid.length}) : ${emails.invalid.slice(0, 20).join(", ")}`,
+      );
+    }
+    return lines;
+  }
+
+  async function importSchoolFiles() {
+    if (!schoolFile && !emailsFile) return;
     setImporting(true);
     setMessage("");
     const form = new FormData();
-    form.set("file", file);
-    form.set("replace", "true");
-    const response = await fetch("/api/admin/classes/import", {
-      method: "POST",
-      body: form,
-    });
+    let url = "/api/admin/students/emails";
+    if (schoolFile) {
+      url = "/api/admin/classes/import";
+      form.set("file", schoolFile);
+      form.set("replace", "true");
+      if (importLevelId) form.set("levelId", importLevelId);
+      if (emailsFile) form.set("emailsFile", emailsFile);
+    } else if (emailsFile) {
+      form.set("file", emailsFile);
+    }
+    const response = await fetch(url, { method: "POST", body: form });
     const data = await response.json();
     setImporting(false);
     if (!response.ok) {
       setMessage(data.error);
       return;
     }
-    const summary = `${data.classesCreated} classes créées, ${data.classesUpdated} mises à jour · ${data.studentsCreated} étudiants créés, ${data.studentsUpdated} mis à jour`;
-    setMessage(
-      data.warnings?.length
-        ? `${summary}\n${data.warnings.join("\n")}`
-        : summary,
-    );
+    const lines: string[] = [];
+    if (schoolFile) {
+      lines.push(
+        `${data.classesCreated} classes créées, ${data.classesUpdated} mises à jour · ${data.studentsCreated} étudiants créés, ${data.studentsUpdated} mis à jour`,
+      );
+      for (const group of data.groups ?? []) {
+        if (group.level) lines.push(`${group.className} → niveau ${group.level}`);
+      }
+      if (data.levelsCreated?.length) {
+        lines.push(`Niveau(x) créé(s) automatiquement : ${data.levelsCreated.join(", ")}`);
+      }
+      if (data.emails) lines.push(...describeEmails(data.emails));
+      if (data.warnings?.length) lines.push(...data.warnings);
+    } else {
+      lines.push(...describeEmails(data));
+    }
+    setMessage(lines.join("\n"));
+    setSchoolFile(null);
+    setEmailsFile(null);
     setOpenId(null);
     await load();
   }
@@ -168,6 +310,21 @@ export function AdminClasses() {
     if (response.ok) await load();
   }
 
+  async function deleteClass(classId: string) {
+    if (!window.confirm("Supprimer définitivement cette classe et ses étudiants ?")) {
+      return;
+    }
+    const response = await fetch(`/api/admin/classes?id=${classId}`, {
+      method: "DELETE",
+    });
+    const data = await response.json();
+    setMessage(response.ok ? "Classe supprimée" : data.error);
+    if (response.ok) {
+      setOpenId(null);
+      await load();
+    }
+  }
+
   async function addStudent(event: React.FormEvent) {
     event.preventDefault();
     if (!openId) return;
@@ -199,7 +356,7 @@ export function AdminClasses() {
     setMessage(response.ok ? "Étudiant modifié" : data.error);
     if (response.ok) {
       setEditingStudent(null);
-      await loadStudents(openId);
+      await Promise.all([load(), loadStudents(openId)]);
     }
   }
 
@@ -217,87 +374,253 @@ export function AdminClasses() {
   }
 
   return (
-    <div>
-      <h1 className="text-2xl font-semibold">Classes & étudiants</h1>
-      <p className="mt-1 text-sm text-muted">
-        Importez le fichier officiel : une feuille correspond à une classe.
-      </p>
-
-      <div className="surface-card mt-6 rounded-xl border-l-4 border-l-gold p-5">
-        <p className="font-semibold">Importer le fichier scolarité XLS</p>
-        <p className="mt-1 text-sm text-muted">
-          Les champs Année, Parcours, Nom Groupe et Identifiant Groupe sont lus
-          automatiquement. La liste officielle remplace les étudiants actifs
-          sans supprimer leur historique de présence.
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-2xl font-semibold">
+          Classes et étudiants
+        </h1>
+        <p className="mt-1 max-w-2xl text-sm text-muted">
+          Importez le fichier officiel : une feuille correspond à une classe.
         </p>
-        <label className="mt-4 inline-block cursor-pointer">
-          <span className="inline-flex h-10 items-center rounded-lg bg-gold px-4 text-sm font-medium text-navy-deep">
-            {importing ? "Import en cours…" : "Choisir le fichier XLS/XLSX"}
-          </span>
-          <input
-            type="file"
-            accept=".xls,.xlsx"
-            className="hidden"
-            disabled={importing}
-            onChange={(event) => {
-              const file = event.target.files?.[0];
-              if (file) void importSchoolWorkbook(file);
-              event.target.value = "";
-            }}
-          />
-        </label>
+      </div>
+
+      <div className="grid gap-4 xl:grid-cols-2">
+        <div className="surface-card rounded-xl border-l-4 border-l-gold p-5">
+          <p className="font-semibold">Importer le fichier scolarité</p>
+          <p className="mt-2 text-sm leading-6 text-muted">
+            ① Fichier scolarité : Année, Semestre, Parcours, Nom Groupe et
+            Identifiant Groupe sont lus automatiquement ; le niveau vient du
+            semestre (S1-S2 → 1re année, S3-S4 → 2e…) et il est créé s’il
+            n’existe pas encore. La liste officielle remplace les étudiants
+            actifs sans supprimer leur historique.
+            <br />② Fichier e-mails (facultatif) : colonnes CIN, Nom et E-mail.
+            Les e-mails sont associés aux étudiants par leur CIN. Il peut aussi
+            être importé seul, plus tard.
+          </p>
+          <div className="mt-4 grid gap-2 sm:grid-cols-2">
+            <FileDropZone
+              accept=".xls,.xlsx"
+              file={schoolFile}
+              onFile={setSchoolFile}
+              disabled={importing}
+              label="① Fichier scolarité"
+              hint="XLS, XLSX"
+            />
+            <FileDropZone
+              accept=".csv,.xls,.xlsx"
+              file={emailsFile}
+              onFile={setEmailsFile}
+              disabled={importing}
+              label="② CIN + e-mail (facultatif)"
+              hint="CSV, XLS, XLSX"
+            />
+          </div>
+          <label className="mt-3 block text-sm">
+            <span className="mb-1 block text-muted">Niveau des classes importées</span>
+            <select
+              value={importLevelId}
+              onChange={(event) => setImportLevelId(event.target.value)}
+              className="field-select"
+              disabled={importing}
+              aria-label="Niveau des classes importées"
+            >
+              <option value="">Automatique, d’après le semestre (S1-S2 → 1re année, S3-S4 → 2e…)</option>
+              {levels.map((level) => (
+                <option key={level.id} value={level.id}>
+                  {level.code} · {level.name} (pour toutes les classes du fichier)
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Button
+              variant="gold"
+              disabled={importing || (!schoolFile && !emailsFile)}
+              onClick={() => void importSchoolFiles()}
+            >
+              {importing
+                ? "Import en cours…"
+                : schoolFile
+                  ? "Importer"
+                  : "Importer les e-mails"}
+            </Button>
+            {schoolFile || emailsFile ? (
+              <Button
+                variant="secondary"
+                disabled={importing}
+                onClick={() => {
+                  setSchoolFile(null);
+                  setEmailsFile(null);
+                }}
+              >
+                Effacer
+              </Button>
+            ) : null}
+          </div>
+        </div>
+
+        <form
+          onSubmit={createClass}
+          className="surface-card grid gap-3 rounded-xl p-5 sm:grid-cols-2"
+        >
+          <p className="font-semibold sm:col-span-2">Ajouter une classe</p>
+          <label className="text-sm">
+            <span className="mb-1 block text-muted">Nom</span>
+            <Input
+              required
+              placeholder="1ENR-1"
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+            />
+          </label>
+          <label className="text-sm">
+            <span className="mb-1 block text-muted">Code</span>
+            <Input
+              required
+              placeholder="1ENR-1"
+              value={code}
+              onChange={(event) => setCode(event.target.value)}
+            />
+          </label>
+          <label className="text-sm sm:col-span-2">
+            <span className="mb-1 block text-muted">Niveau</span>
+            <select
+              value={newLevelId}
+              onChange={(event) => setNewLevelId(event.target.value)}
+              className="field-select"
+            >
+              <option value="">Non défini</option>
+              {levels.map((level) => (
+                <option key={level.id} value={level.id}>
+                  {level.code} · {level.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <Button type="submit" className="sm:col-span-2">
+            Ajouter manuellement
+          </Button>
+        </form>
       </div>
 
       {message ? (
-        <p className="mt-4 whitespace-pre-line rounded-lg bg-surface-2 p-3 text-sm">
+        <p className="whitespace-pre-line rounded-lg bg-surface-2 p-3 text-sm">
           {message}
         </p>
       ) : null}
 
-      <form
-        onSubmit={createClass}
-        className="mt-6 flex flex-wrap items-end gap-2"
-      >
-        <label className="text-sm">
-          <span className="mb-1 block text-muted">Nom</span>
+      {classes.length > 0 ? (
+        <div className="surface-card grid gap-2 rounded-xl p-4 sm:grid-cols-2 lg:grid-cols-5">
           <Input
-            required
-            placeholder="1ENR-1"
-            value={name}
-            onChange={(event) => setName(event.target.value)}
-            className="w-48"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Rechercher une classe…"
+            className="sm:col-span-2 lg:col-span-5"
+            aria-label="Rechercher une classe"
           />
-        </label>
-        <label className="text-sm">
-          <span className="mb-1 block text-muted">Code</span>
-          <Input
-            required
-            placeholder="1ENR-1"
-            value={code}
-            onChange={(event) => setCode(event.target.value)}
-            className="w-40"
-          />
-        </label>
-        <label className="text-sm">
-          <span className="mb-1 block text-muted">Niveau</span>
           <select
-            value={newLevelId}
-            onChange={(event) => setNewLevelId(event.target.value)}
-            className="h-10 rounded-lg border border-border bg-surface px-3"
+            value={levelFilter}
+            onChange={(event) => setLevelFilter(event.target.value)}
+            className="field-select"
+            aria-label="Filtrer par niveau"
           >
-            <option value="">Non défini</option>
-            {levels.map((level) => (
-              <option key={level.id} value={level.id}>
-                {level.code} · {level.name}
-              </option>
-            ))}
+            <option value="">Tous les niveaux</option>
+            {options("level")
+              .sort(([a], [b]) => levelLabel(a).localeCompare(levelLabel(b)))
+              .map(([id, count]) => (
+                <option key={id} value={id}>
+                  {levelLabel(id)} ({count})
+                </option>
+              ))}
           </select>
-        </label>
-        <Button type="submit">Ajouter manuellement</Button>
-      </form>
+          <select
+            value={specialtyFilter}
+            onChange={(event) => setSpecialtyFilter(event.target.value)}
+            className="field-select"
+            aria-label="Filtrer par spécialité"
+          >
+            <option value="">Toutes les spécialités</option>
+            {options("specialty")
+              .sort(([a], [b]) => a.localeCompare(b))
+              .map(([specialty, count]) => (
+                <option key={specialty} value={specialty}>
+                  {specialty} ({count})
+                </option>
+              ))}
+          </select>
+          <select
+            value={programFilter}
+            onChange={(event) => setProgramFilter(event.target.value)}
+            className="field-select"
+            aria-label="Filtrer par parcours"
+          >
+            <option value="">Tous les parcours</option>
+            {options("program")
+              .sort(([a], [b]) => a.localeCompare(b))
+              .map(([program, count]) => (
+                <option key={program} value={program}>
+                  {programLabel(program)} ({count})
+                </option>
+              ))}
+          </select>
+          <select
+            value={yearFilter}
+            onChange={(event) => setYearFilter(event.target.value)}
+            className="field-select"
+            aria-label="Filtrer par année"
+          >
+            <option value="">Toutes les années</option>
+            {options("year")
+              .sort(([a], [b]) => b.localeCompare(a))
+              .map(([year, count]) => (
+                <option key={year} value={year}>
+                  {year} ({count})
+                </option>
+              ))}
+          </select>
+          <select
+            value={semesterFilter}
+            onChange={(event) => setSemesterFilter(event.target.value)}
+            className="field-select"
+            aria-label="Filtrer par semestre"
+          >
+            <option value="">Tous les semestres</option>
+            {options("semester")
+              .sort(([a], [b]) => Number(a) - Number(b))
+              .map(([semester, count]) => (
+                <option key={semester} value={semester}>
+                  Semestre {semester} ({count})
+                </option>
+              ))}
+          </select>
+          <div className="flex items-center gap-3 text-sm text-muted sm:col-span-2 lg:col-span-5">
+            <span>
+              {filteredClasses.length} classe{filteredClasses.length > 1 ? "s" : ""}
+              {filtering ? ` sur ${classes.length}` : ""} ·{" "}
+              {filteredClasses.reduce((total, item) => total + item._count.students, 0)} étudiants
+            </span>
+            {filtering ? (
+              <button type="button" onClick={resetFilters} className="underline hover:text-ink">
+                Effacer les filtres
+              </button>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
 
-      <div className="mt-8 space-y-3">
-        {classes.map((item) => (
+      <div className="space-y-3">
+        {classes.length > 0 && filteredClasses.length === 0 ? (
+          <p className="rounded-xl border border-dashed border-border px-6 py-10 text-center text-sm text-muted">
+            Aucune classe ne correspond à ces filtres.
+          </p>
+        ) : null}
+        {classes.length === 0 ? (
+          <p className="rounded-xl border border-dashed border-border px-6 py-10 text-center text-sm text-muted">
+            Aucune classe pour le moment. Importez un fichier ou ajoutez-en une
+            manuellement.
+          </p>
+        ) : null}
+        {filteredClasses.map((item) => (
           <div key={item.id} className="surface-card rounded-xl">
             <div className="flex flex-wrap items-center gap-3 p-4">
               <div className="min-w-0 flex-1">
@@ -306,15 +629,25 @@ export function AdminClasses() {
                   {item.code} · {item._count.students} étudiants ·{" "}
                   {item._count.sessions} séances
                 </p>
-                {item.program ? (
+                {item.program || item.parcours ? (
                   <p className="mt-1 truncate text-xs text-muted">
-                    {item.program}
+                    {/* The file may give only the code (LI574498): show the parcours name. */}
+                    {item.parcours
+                      ? [item.parcours.mention, item.parcours.specialty].filter(Boolean).join(" : ") || item.parcours.code
+                      : item.program}
                     {item.academicYear ? ` · ${item.academicYear}` : ""}
                     {item.semester ? ` · S${item.semester}` : ""}
                   </p>
                 ) : null}
                 <p className="mt-1 text-xs text-muted">
                   Niveau : {item.level?.name ?? "non défini"}
+                  {item.parcours ? ` · Parcours ${item.parcours.code}` : ""}
+                  {classParts(item.name).specialty
+                    ? ` · Spécialité : ${classParts(item.name).specialty}`
+                    : ""}
+                  {classParts(item.name).group
+                    ? ` · Groupe ${classParts(item.name).group}`
+                    : ""}
                 </p>
               </div>
               <label className="cursor-pointer">
@@ -384,6 +717,23 @@ export function AdminClasses() {
                     placeholder="Année"
                   />
                   <select
+                    value={classDraft.semester ?? ""}
+                    onChange={(event) =>
+                      setClassDraft({
+                        ...classDraft,
+                        semester: event.target.value
+                          ? Number(event.target.value)
+                          : null,
+                      })
+                    }
+                    className="field-select"
+                  >
+                    <option value="">Semestre non défini</option>
+                    <option value="1">Semestre 1</option>
+                    <option value="2">Semestre 2</option>
+                    <option value="3">Semestre 3</option>
+                  </select>
+                  <select
                     value={classDraft.levelId ?? ""}
                     onChange={(event) =>
                       setClassDraft({
@@ -391,7 +741,7 @@ export function AdminClasses() {
                         levelId: event.target.value || null,
                       })
                     }
-                    className="h-10 rounded-lg border border-border bg-surface px-3 text-sm"
+                    className="field-select"
                   >
                     <option value="">Niveau non défini</option>
                     {levels.map((level) => (
@@ -400,8 +750,35 @@ export function AdminClasses() {
                       </option>
                     ))}
                   </select>
+                  <select
+                    value={classDraft.parcoursId ?? ""}
+                    onChange={(event) =>
+                      setClassDraft({
+                        ...classDraft,
+                        parcoursId: event.target.value || null,
+                      })
+                    }
+                    className="field-select"
+                    aria-label="Parcours"
+                  >
+                    <option value="">Parcours non défini</option>
+                    {parcoursList.map((item) => (
+                      <option key={item.id} value={item.id}>
+                        {item.code} · {item.mention} {item.specialty ? `: ${item.specialty}` : ""}
+                      </option>
+                    ))}
+                  </select>
                   <Button type="submit" size="sm">
                     Modifier la classe
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="secondary"
+                    className="text-red-700"
+                    onClick={() => void deleteClass(classDraft.id)}
+                  >
+                    Supprimer la classe
                   </Button>
                 </form>
 
@@ -442,6 +819,38 @@ export function AdminClasses() {
                     }
                     placeholder="Prénom"
                   />
+                  <Input
+                    value={studentForm.cin}
+                    onChange={(event) =>
+                      setStudentForm({ ...studentForm, cin: event.target.value })
+                    }
+                    placeholder="CIN"
+                  />
+                  <Input
+                    type="email"
+                    value={studentForm.email}
+                    onChange={(event) =>
+                      setStudentForm({
+                        ...studentForm,
+                        email: event.target.value,
+                      })
+                    }
+                    placeholder="E-mail"
+                  />
+                  <Input
+                    value={studentForm.phone}
+                    onChange={(event) =>
+                      setStudentForm({
+                        ...studentForm,
+                        phone: event.target.value,
+                      })
+                    }
+                    placeholder="Téléphone"
+                  />
+                  <StatusSelect
+                    value={studentForm.status}
+                    onChange={(status) => setStudentForm({ ...studentForm, status })}
+                  />
                   <Button type="submit" variant="gold" size="sm">
                     Ajouter étudiant
                   </Button>
@@ -454,7 +863,9 @@ export function AdminClasses() {
                         <th className="px-3 py-2">N° inscription</th>
                         <th className="px-3 py-2">Nom</th>
                         <th className="px-3 py-2">Prénom</th>
+                        <th className="px-3 py-2">CIN</th>
                         <th className="px-3 py-2">E-mail</th>
+                        <th className="px-3 py-2">Statut</th>
                         <th className="px-3 py-2 text-right">Actions</th>
                       </tr>
                     </thead>
@@ -462,31 +873,39 @@ export function AdminClasses() {
                       {students.map((student) => (
                         <tr
                           key={student.id}
-                          className="border-t border-border"
+                          className={`border-t border-border ${isExempt(student.status) ? "bg-surface-2 text-muted" : ""}`}
                         >
                           <td className="px-3 py-2">{student.matricule}</td>
                           <td className="px-3 py-2">{student.lastName}</td>
                           <td className="px-3 py-2">{student.firstName}</td>
                           <td className="px-3 py-2 text-muted">
+                            {maskCin(student.cin)}
+                          </td>
+                          <td className="px-3 py-2 text-muted">
                             {student.email || "—"}
                           </td>
-                          <td className="space-x-3 px-3 py-2 text-right">
+                          <td className="px-3 py-2">
+                            {isExempt(student.status)
+                              ? "D · dispensé"
+                              : student.status || "—"}
+                          </td>
+                          <td className="space-x-2 whitespace-nowrap px-3 py-1 text-right">
                             <Link
                               href={`/admin/students/${student.id}`}
-                              className="text-navy hover:underline"
+                              className="inline-flex min-h-9 items-center px-1 text-navy hover:underline"
                             >
                               Historique
                             </Link>
                             <button
                               type="button"
-                              className="text-navy hover:underline"
+                              className="inline-flex min-h-9 items-center px-1 text-navy hover:underline"
                               onClick={() => setEditingStudent(student)}
                             >
                               Modifier
                             </button>
                             <button
                               type="button"
-                              className="text-red-700 hover:underline"
+                              className="min-h-9 px-1 text-red-700 hover:underline"
                               onClick={() =>
                                 void deactivateStudent(student.id)
                               }
@@ -507,6 +926,7 @@ export function AdminClasses() {
 
                 {editingStudent ? (
                   <form
+                    ref={studentEditForm}
                     onSubmit={saveStudent}
                     className="mt-4 grid gap-2 rounded-lg bg-surface-2 p-3 sm:grid-cols-2 lg:grid-cols-4"
                   >
@@ -554,6 +974,49 @@ export function AdminClasses() {
                       }
                       placeholder="E-mail"
                     />
+                    <Input
+                      value={editingStudent.cin ?? ""}
+                      onChange={(event) =>
+                        setEditingStudent({
+                          ...editingStudent,
+                          cin: event.target.value,
+                        })
+                      }
+                      placeholder="CIN"
+                    />
+                    <Input
+                      value={editingStudent.phone ?? ""}
+                      onChange={(event) =>
+                        setEditingStudent({
+                          ...editingStudent,
+                          phone: event.target.value,
+                        })
+                      }
+                      placeholder="Téléphone"
+                    />
+                    <StatusSelect
+                      value={editingStudent.status ?? ""}
+                      onChange={(status) =>
+                        setEditingStudent({ ...editingStudent, status })
+                      }
+                    />
+                    <select
+                      value={editingStudent.classId ?? openId ?? ""}
+                      onChange={(event) =>
+                        setEditingStudent({
+                          ...editingStudent,
+                          classId: event.target.value,
+                        })
+                      }
+                      className="field-select"
+                      aria-label="Classe"
+                    >
+                      {classes.map((cls) => (
+                        <option key={cls.id} value={cls.id}>
+                          {cls.name}
+                        </option>
+                      ))}
+                    </select>
                     <Button type="submit" size="sm">
                       Enregistrer
                     </Button>

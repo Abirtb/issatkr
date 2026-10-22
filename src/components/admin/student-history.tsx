@@ -17,6 +17,7 @@ type Data = {
       id: string;
       present: boolean;
       justification: string | null;
+      justificationFile: string | null;
       amendedAt: string | null;
       amendedBy: { name: string } | null;
       session: {
@@ -51,7 +52,7 @@ export function StudentHistory({ id }: { id: string }) {
 
   return (
     <div>
-      <Link href="/admin/classes" className="text-sm text-muted hover:text-ink">
+      <Link href="/admin/classes" className="-my-2 inline-flex min-h-10 items-center text-sm text-muted hover:text-ink">
         ← Classes et étudiants
       </Link>
       <h1 className="mt-3 text-2xl font-semibold">
@@ -125,6 +126,16 @@ export function StudentHistory({ id }: { id: string }) {
                 </td>
                 <td className="px-4 py-3 text-muted">
                   {attendance.justification || "—"}
+                  {attendance.justificationFile ? (
+                    <a
+                      href={`/api/admin/attendance/justificatif?id=${attendance.id}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="block text-xs text-navy hover:underline"
+                    >
+                      Voir le justificatif
+                    </a>
+                  ) : null}
                   {attendance.amendedBy ? (
                     <span className="block text-xs">
                       Modifié par {attendance.amendedBy.name}

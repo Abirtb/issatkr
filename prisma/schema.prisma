@@ -24,6 +24,11 @@ enum NotificationType {
   ELIMINATION
 }
 
+enum TokenPurpose {
+  INVITE
+  RESET
+}
+
 enum NotificationStatus {
   PENDING
   SENDING
@@ -32,77 +37,100 @@ enum NotificationStatus {
 }
 
 model User {
-  id                   String       @id @default(cuid())
-  email                String       @unique
+  id                   String         @id @default(cuid())
+  // Optional: teachers can be imported from a list without e-mail; they need
+  // one before they can be invited or log in.
+  email                String?        @unique
   password             String
   name                 String
-  role                 Role         @default(PROF)
-  active               Boolean      @default(true)
-  createdAt            DateTime     @default(now())
-  updatedAt            DateTime     @default(now()) @updatedAt
-  taughtSessions       Session[]    @relation("SessionProfessor")
-  attendanceAmendments Attendance[] @relation("AttendanceAmendments")
+  // Teaching grade from the staff list (Maître-assistant, vacataire…).
+  grade                String?
+  role                 Role           @default(PROF)
+  active               Boolean        @default(true)
+  // Created without a password: waits for an invitation link (sent by an admin,
+  // never automatically). Cleared once a password is set.
+  awaitingActivation   Boolean        @default(false)
+  // Bumped on logout: every token issued before is rejected.
+  sessionVersion       Int            @default(0)
+  createdAt            DateTime       @default(now())
+  updatedAt            DateTime       @default(now()) @updatedAt
+  taughtSessions       Session[]      @relation("SessionProfessor")
+  weeklySlots          WeeklySlot[]
+  accountTokens        AccountToken[]
+  attendanceAmendments Attendance[]   @relation("AttendanceAmendments")
 }
 
 model AcademicLevel {
-  id         String             @id @default(cuid())
-  code       String             @unique
-  name       String
-  active     Boolean            @default(true)
-  createdAt  DateTime           @default(now())
-  updatedAt  DateTime           @default(now()) @updatedAt
-  classes    Class[]
-  thresholds AbsenceThreshold[]
-  alertStates AlertState[]
+  id            String              @id @default(cuid())
+  code          String              @unique
+  name          String
+  active        Boolean             @default(true)
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @default(now()) @updatedAt
+  classes       Class[]
+  curricula     SubjectCurriculum[]
+  thresholds    AbsenceThreshold[]
+  alertStates   AlertState[]
   notifications NotificationLog[]
 }
 
 model Subject {
-  id            String             @id @default(cuid())
-  code          String             @unique
+  id            String              @id @default(cuid())
+  code          String              @unique
   name          String
-  active        Boolean            @default(true)
-  createdAt     DateTime           @default(now())
-  updatedAt     DateTime           @default(now()) @updatedAt
+  active        Boolean             @default(true)
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @default(now()) @updatedAt
   sessions      Session[]
+  weeklySlots   WeeklySlot[]
+  curricula     SubjectCurriculum[]
+  elements      CourseElement[]
   thresholds    AbsenceThreshold[]
   alertStates   AlertState[]
   notifications NotificationLog[]
 }
 
 model Class {
-  id           String    @id @default(cuid())
+  id           String         @id @default(cuid())
   name         String
-  code         String    @unique
-  externalId   String?   @unique
+  code         String         @unique
+  externalId   String?        @unique
   program      String?
   academicYear String?
   semester     Int?
   levelId      String?
+  // Official parcours (LI574498), linked from the scolarité "Parcours" text.
+  parcoursId   String?
+  parcours     Parcours?      @relation(fields: [parcoursId], references: [id], onDelete: SetNull)
   level        AcademicLevel? @relation(fields: [levelId], references: [id], onDelete: SetNull)
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @default(now()) @updatedAt
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @default(now()) @updatedAt
   students     Student[]
   sessions     Session[]
+  weeklySlots  WeeklySlot[]
 
   @@index([levelId])
+  @@index([parcoursId])
 }
 
 model Student {
-  id           String       @id @default(cuid())
-  matricule    String
-  cin          String?
-  firstName    String
-  lastName     String
-  firstNameAr  String?
-  lastNameAr   String?
-  email        String?
-  phone        String?
-  active       Boolean      @default(true)
-  classId      String
-  class        Class        @relation(fields: [classId], references: [id], onDelete: Cascade)
-  attendances Attendance[]
-  alertStates AlertState[]
+  id            String            @id @default(cuid())
+  matricule     String
+  cin           String?
+  firstName     String
+  lastName      String
+  firstNameAr   String?
+  lastNameAr    String?
+  email         String?
+  phone         String?
+  // "Statut" of the scolarité file (N, R, D…). D = dispensé: never absent,
+  // his absences always count 0.
+  status        String?
+  active        Boolean           @default(true)
+  classId       String
+  class         Class             @relation(fields: [classId], references: [id], onDelete: Cascade)
+  attendances   Attendance[]
+  alertStates   AlertState[]
   notifications NotificationLog[]
 
   @@unique([matricule, classId])
@@ -126,26 +154,85 @@ model Session {
   room         String?
   createdAt    DateTime     @default(now())
   finalizedAt  DateTime?
+  // Set when the session was generated from a weekly course.
+  weeklySlotId String?
+  weeklySlot   WeeklySlot?  @relation(fields: [weeklySlotId], references: [id], onDelete: SetNull)
   attendances  Attendance[]
 
+  @@unique([classId, courseName, date, startTime])
   @@index([classId, date])
   @@index([professorId, date])
   @@index([subjectId, date])
-  @@unique([classId, courseName, date, startTime])
+  @@index([weeklySlotId, date])
+}
+
+// Teaching period (e.g. "S1 2025-2026"): weekly courses repeat inside it.
+// Dates are stored at local noon, like Session.date.
+model AcademicPeriod {
+  id          String       @id @default(cuid())
+  name        String
+  startDate   DateTime
+  endDate     DateTime
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @default(now()) @updatedAt
+  weeklySlots WeeklySlot[]
+}
+
+// Holiday or vacation (one day: startDate = endDate). No weekly course is
+// generated on these days.
+model DayOff {
+  id        String   @id @default(cuid())
+  label     String
+  startDate DateTime
+  endDate   DateTime
+  createdAt DateTime @default(now())
+}
+
+// "Every Monday 08:30-10:00" during a period. The real sessions are generated
+// from it (Session.weeklySlotId); attendance is always taken on those.
+model WeeklySlot {
+  id            String         @id @default(cuid())
+  periodId      String
+  period        AcademicPeriod @relation(fields: [periodId], references: [id], onDelete: Cascade)
+  classId       String
+  class         Class          @relation(fields: [classId], references: [id], onDelete: Cascade)
+  subjectId     String
+  subject       Subject        @relation(fields: [subjectId], references: [id], onDelete: Restrict)
+  professorId   String?
+  professor     User?          @relation(fields: [professorId], references: [id], onDelete: SetNull)
+  weekday       Int // 1 = lundi … 7 = dimanche
+  startTime     String
+  endTime       String?
+  room          String?
+  // 1 = every week, 2 = every other week. With 2, weekOffset picks the weeks
+  // (0: 1st, 3rd… week of the period; 1: 2nd, 4th…).
+  intervalWeeks Int            @default(1)
+  weekOffset    Int            @default(0)
+  // Occurrences removed or moved by hand (YYYY-MM-DD, comma-separated):
+  // never generated again.
+  excludedDates String         @default("")
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @default(now()) @updatedAt
+  sessions      Session[]
+
+  @@index([periodId])
+  @@index([classId])
 }
 
 model Attendance {
-  id            String   @id @default(cuid())
-  studentId     String
-  sessionId     String
-  present       Boolean  @default(true)
-  justification String?
-  amendedAt     DateTime?
-  amendedById   String?
-  createdAt     DateTime @default(now())
-  student       Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
-  session       Session  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  amendedBy     User?    @relation("AttendanceAmendments", fields: [amendedById], references: [id], onDelete: SetNull)
+  id                    String    @id @default(cuid())
+  studentId             String
+  sessionId             String
+  present               Boolean   @default(true)
+  justification         String?
+  justificationFile     String?
+  justificationFileName String?
+  amendedAt             DateTime?
+  amendedById           String?
+  createdAt             DateTime  @default(now())
+  student               Student   @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  session               Session   @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  amendedBy             User?     @relation("AttendanceAmendments", fields: [amendedById], references: [id], onDelete: SetNull)
 
   @@unique([studentId, sessionId])
   @@index([sessionId])
@@ -211,4 +298,90 @@ model NotificationLog {
 
   @@index([status, createdAt])
   @@index([studentId, subjectId])
+}
+
+// Who did what to which record. Never holds the sensitive values themselves.
+model AuditLog {
+  id         String   @id @default(cuid())
+  actorId    String?
+  actorRole  String?
+  action     String
+  targetType String?
+  targetId   String?
+  details    String?
+  ip         String?
+  createdAt  DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([actorId, createdAt])
+  @@index([targetType, targetId])
+}
+
+// One-time links to set a password (invitation or reset). Only a SHA-256 hash
+// of the token is stored; the token itself exists only in the link.
+model AccountToken {
+  id          String       @id @default(cuid())
+  userId      String
+  tokenHash   String       @unique
+  purpose     TokenPurpose
+  expiresAt   DateTime
+  usedAt      DateTime?
+  createdById String?
+  createdAt   DateTime     @default(now())
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+// Programme: the subjects taught for a level and a spécialité (e.g. L1 + ENR,
+// from class names like "1ENR1"). An empty spécialité means every spécialité
+// of that level (tronc commun). A subject can belong to several programmes.
+model SubjectCurriculum {
+  id        String        @id @default(cuid())
+  subjectId String
+  subject   Subject       @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  levelId   String
+  level     AcademicLevel @relation(fields: [levelId], references: [id], onDelete: Cascade)
+  specialty String        @default("")
+  createdAt DateTime      @default(now())
+
+  @@unique([subjectId, levelId, specialty])
+  @@index([levelId, specialty])
+}
+
+// Official study programme (parcours) from the ministry list: "LI574498",
+// mention "Génie Energétique", spécialité "Tronc commun ( ISSAT Kairouan)".
+model Parcours {
+  id        String          @id @default(cuid())
+  code      String          @unique
+  domain    String          @default("")
+  mention   String          @default("")
+  specialty String          @default("")
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @default(now()) @updatedAt
+  elements  CourseElement[]
+  classes   Class[]
+}
+
+// Élément d'enseignement (EE) of a parcours: "661294111 Conception 1", S1,
+// with its hours. Its subject (code = EE code) is what the timetable uses.
+model CourseElement {
+  id            String   @id @default(cuid())
+  code          String   @unique
+  parcoursId    String
+  parcours      Parcours @relation(fields: [parcoursId], references: [id], onDelete: Cascade)
+  subjectId     String
+  subject       Subject  @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  semester      Int
+  regime        String   @default("")
+  coefficient   Float    @default(0)
+  credits       Float    @default(0)
+  hoursLecture  Float    @default(0)
+  hoursTutorial Float    @default(0)
+  hoursLab      Float    @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @default(now()) @updatedAt
+
+  @@index([parcoursId, semester])
+  @@index([subjectId])
 }

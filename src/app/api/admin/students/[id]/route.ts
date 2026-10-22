@@ -1,22 +1,45 @@
 import { NextResponse } from "next/server";
-import { requireAdmin } from "@/lib/auth";
+import { requireAdmin, authFailure } from "@/lib/auth";
 import { prisma } from "@/lib/db";
+import { isExempt } from "@/lib/student-status";
+import { throttleUser } from "@/lib/rate-limit";
+import { audit } from "@/lib/security-log";
 
 export async function GET(
-  _req: Request,
+  req: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
-    await requireAdmin();
+    const admin = await requireAdmin();
+    const throttled = throttleUser(admin.id, "read");
+    if (throttled) return throttled;
     const { id } = await params;
     const student = await prisma.student.findUnique({
       where: { id },
-      include: {
-        class: { include: { level: true } },
+      select: {
+        id: true,
+        firstName: true,
+        lastName: true,
+        matricule: true,
+        email: true,
+        status: true,
+        class: { select: { name: true, levelId: true, level: { select: { name: true } } } },
         attendances: {
-          include: {
-            session: { include: { subject: true } },
+          select: {
+            id: true,
+            present: true,
+            justification: true,
+            justificationFile: true,
+            amendedAt: true,
             amendedBy: { select: { name: true } },
+            session: {
+              select: {
+                date: true,
+                startTime: true,
+                courseName: true,
+                subject: { select: { id: true, code: true, name: true } },
+              },
+            },
           },
           orderBy: { session: { date: "desc" } },
         },
@@ -46,7 +69,8 @@ export async function GET(
       };
       if (attendance.present) summary.present++;
       else if (attendance.justification) summary.justified++;
-      else summary.absences++;
+      // Dispensé (statut D): his absences are not counted.
+      else if (!isExempt(student.status)) summary.absences++;
       summaries.set(subject.id, summary);
     }
     const thresholds = student.class.levelId
@@ -57,6 +81,7 @@ export async function GET(
     const thresholdBySubject = new Map(
       thresholds.map((item) => [item.subjectId, item.eliminationCount]),
     );
+    await audit(admin, "student.view", { type: "student", id }, undefined, req);
     return NextResponse.json({
       student,
       summaries: [...summaries.values()].map((summary) => {
@@ -74,7 +99,9 @@ export async function GET(
         };
       }),
     });
-  } catch {
+  } catch (error) {
+    const denied = authFailure(error);
+    if (denied) return denied;
     return NextResponse.json({ error: "Non autorisé" }, { status: 403 });
   }
 }

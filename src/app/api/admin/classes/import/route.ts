@@ -1,20 +1,54 @@
 import { NextResponse } from "next/server";
-import { requireAdmin } from "@/lib/auth";
+import { requireAdmin, authFailure } from "@/lib/auth";
 import { prisma } from "@/lib/db";
+import { throttleUser } from "@/lib/rate-limit";
+import { audit, logServerError } from "@/lib/security-log";
 import {
   MAX_IMPORT_BYTES,
   MAX_IMPORT_ROWS,
+  matchLevel,
+  newLevelFor,
+  parseCinEmailWorkbook,
   parseEnrollmentWorkbook,
 } from "@/lib/parse-upload";
+import { linkClassesToParcours } from "@/lib/parcours-import";
+import { applyEmailsByCin } from "@/lib/student-emails";
+import { cleanCin } from "@/lib/student-fields";
 
 export async function POST(req: Request) {
   try {
-    await requireAdmin();
+    const admin = await requireAdmin();
+    const throttled = throttleUser(admin.id, "import");
+    if (throttled) return throttled;
     const form = await req.formData();
     const file = form.get("file");
+    const emailsFile = form.get("emailsFile");
     const replace = form.get("replace") !== "false";
+    // Level chosen in the import form: applies to every class of the file.
+    // Empty: automatic (from the semester, else from the group name).
+    const forcedLevelId = String(form.get("levelId") ?? "").trim() || null;
     if (!(file instanceof File)) {
       return NextResponse.json({ error: "Fichier requis" }, { status: 400 });
+    }
+    const hasEmailsFile = emailsFile instanceof File && emailsFile.size > 0;
+    if (
+      hasEmailsFile &&
+      (!/\.(csv|xlsx|xls)$/i.test(emailsFile.name) ||
+        emailsFile.size > MAX_IMPORT_BYTES)
+    ) {
+      return NextResponse.json(
+        { error: "Fichier e-mails : CSV, XLSX ou XLS de 5 Mo maximum" },
+        { status: 400 },
+      );
+    }
+    const emailRows = hasEmailsFile
+      ? parseCinEmailWorkbook(await emailsFile.arrayBuffer())
+      : [];
+    if (hasEmailsFile && emailRows.length === 0) {
+      return NextResponse.json(
+        { error: "Fichier e-mails : colonnes CIN et E-mail introuvables" },
+        { status: 400 },
+      );
     }
     if (!/\.(xls|xlsx)$/i.test(file.name)) {
       return NextResponse.json(
@@ -50,12 +84,45 @@ export async function POST(req: Request) {
       );
     }
 
+    const levels = await prisma.academicLevel.findMany({
+      where: { active: true },
+      select: { id: true, code: true, name: true },
+    });
+    if (forcedLevelId && !levels.some((level) => level.id === forcedLevelId)) {
+      return NextResponse.json({ error: "Niveau choisi introuvable" }, { status: 400 });
+    }
+    const levelNames = new Map(levels.map((level) => [level.id, level.name]));
+    const groupLevels = new Map<string, string | null>();
+    const levelsCreated: string[] = [];
+
     const result = await prisma.$transaction(
       async (tx) => {
         let classesCreated = 0;
         let classesUpdated = 0;
         let studentsCreated = 0;
         let studentsUpdated = 0;
+
+        // Detected level, created when missing (e.g. "L1 · Licence 1" on an
+        // empty database), so a class never stays without its level.
+        async function levelFor(group: (typeof groups)[number]) {
+          if (forcedLevelId) return forcedLevelId;
+          const detected = matchLevel(levels, group);
+          if (detected) return detected.id;
+          const wanted = newLevelFor(group);
+          if (!wanted) return null;
+          const level = await tx.academicLevel.upsert({
+            where: { code: wanted.code },
+            create: wanted,
+            update: { active: true },
+            select: { id: true, code: true, name: true },
+          });
+          if (!levels.some((item) => item.id === level.id)) {
+            levels.push(level);
+            levelNames.set(level.id, level.name);
+            levelsCreated.push(`${level.code} · ${level.name}`);
+          }
+          return level.id;
+        }
 
         for (const group of groups) {
           let cls = group.externalId
@@ -64,6 +131,7 @@ export async function POST(req: Request) {
               })
             : null;
           cls ??= await tx.class.findUnique({ where: { code: group.code } });
+          const levelId = await levelFor(group);
 
           if (cls) {
             cls = await tx.class.update({
@@ -74,6 +142,8 @@ export async function POST(req: Request) {
                 program: group.program || cls.program,
                 academicYear: group.academicYear || cls.academicYear,
                 semester: group.semester ?? cls.semester,
+                // A level set earlier is kept, unless one is chosen in the import form.
+                levelId: forcedLevelId ?? cls.levelId ?? levelId,
               },
             });
             classesUpdated++;
@@ -86,10 +156,13 @@ export async function POST(req: Request) {
                 program: group.program || null,
                 academicYear: group.academicYear || null,
                 semester: group.semester,
+                levelId,
               },
             });
             classesCreated++;
           }
+
+          groupLevels.set(group.sheetName, cls.levelId);
 
           const uniqueStudents = [
             ...new Map(
@@ -126,22 +199,26 @@ export async function POST(req: Request) {
               },
               create: {
                 ...student,
-                cin: student.cin || null,
+                cin: cleanCin(student.cin),
                 firstNameAr: student.firstNameAr || null,
                 lastNameAr: student.lastNameAr || null,
                 email: student.email || null,
                 phone: student.phone || null,
+                status: student.status || null,
                 classId: cls.id,
                 active: true,
               },
               update: {
-                cin: student.cin || null,
+                cin: cleanCin(student.cin),
                 firstName: student.firstName,
                 lastName: student.lastName,
                 firstNameAr: student.firstNameAr || null,
                 lastNameAr: student.lastNameAr || null,
-                email: student.email || null,
-                phone: student.phone || null,
+                // Keep values filled in earlier (e.g. e-mails merged by CIN).
+                email: student.email || undefined,
+                phone: student.phone || undefined,
+                // The file's status replaces the previous one (D can be lifted).
+                status: student.status || null,
                 active: true,
               },
             });
@@ -150,32 +227,57 @@ export async function POST(req: Request) {
           }
         }
 
+        const emails = emailRows.length
+          ? await applyEmailsByCin(tx, emailRows)
+          : null;
+        // "Parcours" text of the file → official parcours (LI…), if imported.
+        await linkClassesToParcours(tx);
+
         return {
           classesCreated,
           classesUpdated,
           studentsCreated,
           studentsUpdated,
+          emails,
         };
       },
       { timeout: 30_000 },
     );
 
+    await audit(admin, "students.import", { type: "workbook" }, {
+      sheets: groups.length,
+      rows: totalRows,
+      emailRows: emailRows.length,
+      replace,
+    }, req);
     return NextResponse.json({
       ...result,
+      levelsCreated,
       groups: groups.map((group) => ({
         sheet: group.sheetName,
         className: group.name,
         students: group.students.length,
+        level: levelNames.get(groupLevels.get(group.sheetName) ?? "") ?? null,
       })),
-      warnings: groups
-        .filter((group) => group.students.length === 0)
-        .map(
-          (group) =>
-            `${group.sheetName}: classe créée, mais aucune identité étudiante n’est renseignée`,
-        ),
+      warnings: [
+        ...groups
+          .filter((group) => group.students.length === 0)
+          .map(
+            (group) =>
+              `${group.sheetName}: classe créée, mais aucune identité étudiante n’est renseignée`,
+          ),
+        ...groups
+          .filter((group) => !groupLevels.get(group.sheetName))
+          .map(
+            (group) =>
+              `${group.name} : niveau non détecté, choisissez-le dans « Gérer »`,
+          ),
+      ],
     });
   } catch (error) {
-    console.error(error);
+    const denied = authFailure(error);
+    if (denied) return denied;
+    logServerError("classes.import", error);
     return NextResponse.json(
       { error: "Import du fichier scolarité échoué" },
       { status: 500 },

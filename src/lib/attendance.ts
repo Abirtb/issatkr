@@ -1,5 +1,6 @@
 import { prisma } from "./db";
 import { resolveAlertLevel } from "./alert-policy";
+import { countedStudent, isExempt } from "./student-status";
 
 export async function countUnjustifiedAbsences(studentId: string) {
   return prisma.attendance.count({
@@ -7,6 +8,7 @@ export async function countUnjustifiedAbsences(studentId: string) {
       studentId,
       present: false,
       OR: [{ justification: null }, { justification: "" }],
+      student: countedStudent,
     },
   });
 }
@@ -33,7 +35,16 @@ export async function getAttendanceReport(filters: AttendanceReportFilters) {
         ...(filters.levelId ? { levelId: filters.levelId } : {}),
       },
     },
-    include: { class: { include: { level: true } } },
+    // Reports reach teachers too: identity fields only, no CIN/e-mail/phone.
+    select: {
+      id: true,
+      matricule: true,
+      firstName: true,
+      lastName: true,
+      status: true,
+      classId: true,
+      class: { include: { level: true } },
+    },
     orderBy: [{ lastName: "asc" }, { firstName: "asc" }],
   });
   const levelIds = [
@@ -96,12 +107,15 @@ export async function getAttendanceReport(filters: AttendanceReportFilters) {
     thresholds
       .filter((threshold) => threshold.levelId === student.class.levelId)
       .map((threshold) => {
-        const values = stats.get(`${student.id}:${threshold.subjectId}`) ?? {
+        const found = stats.get(`${student.id}:${threshold.subjectId}`) ?? {
           absences: 0,
           justified: 0,
           present: 0,
           total: 0,
         };
+        // Dispensé (statut D): never absent, never warned or eliminated.
+        const exempt = isExempt(student.status);
+        const values = exempt ? { ...found, absences: 0 } : found;
         const status = resolveAlertLevel(
           values.absences,
           threshold.eliminationCount,
@@ -114,6 +128,7 @@ export async function getAttendanceReport(filters: AttendanceReportFilters) {
           threshold: threshold.eliminationCount,
           ...values,
           status,
+          exempt,
           eliminated: status === "ELIMINATED",
         };
       }),
