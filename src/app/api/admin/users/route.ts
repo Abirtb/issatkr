@@ -183,29 +183,29 @@ export async function DELETE(req: Request) {
         { status: 400 },
       );
     }
-    // ?permanent=1: really delete, only for an account with no history
-    // (an entry made by mistake, a duplicate). Otherwise: deactivate.
+    // ?permanent=1: delete the account for good. Its sessions, weekly courses
+    // and the attendance already taken stay (their teacher becomes empty:
+    // onDelete SetNull). Administrator accounts are never deleted here.
     if (url.searchParams.get("permanent") === "1") {
       const user = await prisma.user.findUnique({
         where: { id },
         select: {
-          _count: {
-            select: { taughtSessions: true, weeklySlots: true, attendanceAmendments: true },
-          },
+          role: true,
+          _count: { select: { taughtSessions: true, weeklySlots: true } },
         },
       });
       if (!user) return NextResponse.json({ error: "Compte introuvable" }, { status: 404 });
-      const { taughtSessions, weeklySlots, attendanceAmendments } = user._count;
-      if (taughtSessions || weeklySlots || attendanceAmendments) {
+      if (user.role === "ADMIN") {
         return NextResponse.json(
-          {
-            error: `Suppression impossible : ce compte a un historique (${taughtSessions} séance(s), ${weeklySlots} cours hebdomadaire(s)). Désactivez-le plutôt.`,
-          },
-          { status: 409 },
+          { error: "Un compte administrateur ne peut pas être supprimé ici : changez d’abord son rôle." },
+          { status: 400 },
         );
       }
       await prisma.user.delete({ where: { id } });
-      await audit(admin, "user.delete", { type: "user", id }, undefined, req);
+      await audit(admin, "user.delete", { type: "user", id }, {
+        sessions: user._count.taughtSessions,
+        weeklySlots: user._count.weeklySlots,
+      }, req);
       return NextResponse.json({ ok: true, deleted: true });
     }
     const result = await prisma.user.updateMany({

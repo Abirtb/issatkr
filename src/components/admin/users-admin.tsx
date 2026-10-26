@@ -244,11 +244,11 @@ export function AdminUsers() {
   }
 
   async function remove(user: UserRow) {
-    if (
-      !window.confirm(
-        `Supprimer définitivement ${user.name} ?\nÀ utiliser pour une erreur ou un doublon. Un compte avec des séances ne peut être que désactivé.`,
-      )
-    ) {
+    const history = user._count.taughtSessions + user._count.weeklySlots;
+    const warning = history
+      ? `\n\nCet enseignant a ${user._count.taughtSessions} séance(s) et ${user._count.weeklySlots} cours hebdomadaire(s). Ils seront conservés, avec les présences déjà saisies, mais afficheront « Enseignant non affecté ». Pensez à les réattribuer dans l’emploi du temps.`
+      : "";
+    if (!window.confirm(`Supprimer définitivement le compte de ${user.name} ?${warning}\n\nCette action est irréversible.`)) {
       return;
     }
     const response = await fetch(`/api/admin/users?id=${user.id}&permanent=1`, { method: "DELETE" });
@@ -483,7 +483,6 @@ export function AdminUsers() {
           <tbody>
             {shownUsers.map((user) => {
               const status = statusOf(user);
-              const deletable = user._count.taughtSessions === 0 && user._count.weeklySlots === 0;
               return (
                 <tr key={user.id} className="border-t border-border">
                   <td className="px-4 py-3">
@@ -538,7 +537,7 @@ export function AdminUsers() {
                         Désactiver
                       </button>
                     ) : null}
-                    {deletable && user.role !== "ADMIN" ? (
+                    {user.role !== "ADMIN" ? (
                       <button
                         type="button"
                         onClick={() => void remove(user)}
