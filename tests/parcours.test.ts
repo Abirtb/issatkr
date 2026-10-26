@@ -75,3 +75,18 @@ test("parcours code in the scolarité 'Parcours' cell", () => {
   assert.equal(parcoursCodeIn("LI574498 - Génie Energétique : Tronc commun"), "LI574498");
   assert.equal(parcoursCodeIn("Génie Energétique : Tronc commun ( ISSAT Kairouan)"), null);
 });
+
+test("EE list: variant headers (Crédits ECTS, Coefficient, TP (h)…) and values like « 3 crédits »", () => {
+  const rows = parseCourseElements(
+    workbook([
+      ["Semestre", "Elements d'enseignements LI574498"],
+      [1, "Code EE", "Intitulé", "Régime", "Coefficient", "Crédits ECTS", "TP (h)", "TD (h)", "Cours (h)"],
+      [1, 574498111, "Mécanique 1", "MX", "1,5", "3 crédits", "0", "21h", "21"],
+    ]),
+  );
+  assert.equal(rows.length, 1);
+  assert.deepEqual(
+    [rows[0].name, rows[0].regime, rows[0].coefficient, rows[0].credits, rows[0].hoursLab, rows[0].hoursTutorial, rows[0].hoursLecture],
+    ["Mécanique 1", "MX", 1.5, 3, 0, 21, 21],
+  );
+});

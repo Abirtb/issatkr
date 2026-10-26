@@ -27,8 +27,10 @@ const key = (value: unknown) =>
     .replace(/[^a-z0-9]/g, "");
 const text = (value: unknown) => String(value ?? "").replace(/\s+/g, " ").trim();
 // "10,5" (French Excel) or "10.5".
+// "10,5" (French Excel), "10.5", "3 crédits", "21h" → the first number.
 const number = (value: unknown) => {
-  const parsed = Number(String(value ?? "").replace(",", ".").trim());
+  const match = String(value ?? "").match(/-?\d+(?:[.,]\d+)?/);
+  const parsed = match ? Number(match[0].replace(",", ".")) : NaN;
   return Number.isFinite(parsed) ? parsed : 0;
 };
 
@@ -86,15 +88,22 @@ export function parseCourseElements(buffer: ArrayBuffer): ElementRow[] {
       const keys = row.map(key);
       if (keys.includes("codeee")) {
         const at = (...names: string[]) => keys.findIndex((cell) => names.includes(cell));
+        // Exact header first, else a header that starts with / contains the word
+        // ("Crédits ECTS", "Nb crédits", "TP (h)", "Cours intégré"…).
+        const like = (exact: string[], test: (cell: string) => boolean) => {
+          const index = at(...exact);
+          return index >= 0 ? index : keys.findIndex((cell, column) => column !== codeColumn && test(cell));
+        };
+        const codeColumn = at("codeee");
         columns = {
-          code: at("codeee"),
-          name: at("libelle", "intitule"),
-          regime: at("rg", "regime"),
-          coefficient: at("coef", "coefficient"),
-          credits: at("credit", "credits"),
-          lab: at("tp"),
-          tutorial: at("td"),
-          lecture: at("cours", "c"),
+          code: codeColumn,
+          name: like(["libelle", "intitule"], (cell) => cell.startsWith("libelle") || cell.startsWith("intitule")),
+          regime: like(["rg", "regime"], (cell) => cell.startsWith("regime")),
+          coefficient: like(["coef", "coefficient"], (cell) => cell.startsWith("coef")),
+          credits: like(["credit", "credits", "cr", "ects"], (cell) => cell.includes("credit") || cell.includes("ects")),
+          lab: like(["tp"], (cell) => cell.startsWith("tp") || cell.includes("travauxpratiques")),
+          tutorial: like(["td"], (cell) => cell.startsWith("td") || cell.includes("travauxdiriges")),
+          lecture: like(["cours", "c"], (cell) => cell.startsWith("cours")),
           semester: at("semestre") >= 0 ? at("semestre") : semesterColumn,
         };
         return;
