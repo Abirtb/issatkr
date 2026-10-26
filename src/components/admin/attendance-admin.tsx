@@ -267,21 +267,6 @@ export function AdminAttendance() {
                     >
                       Enregistrer le motif
                     </Button>
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      disabled={busy}
-                      className="sm:ml-auto"
-                      onClick={() =>
-                        void patch(
-                          a.id,
-                          { present: true },
-                          "Saisie corrigée : présent",
-                        )
-                      }
-                    >
-                      Corriger : présent
-                    </Button>
                   </div>
                 </div>
               ) : (

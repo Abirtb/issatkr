@@ -9,7 +9,12 @@ import { CalendarPanel, type DayOff, type Period } from "@/components/schedule/c
 import { classParts } from "@/lib/class-name";
 
 type Option = { id: string; name: string; code?: string; email?: string };
-type ClassOption = Option & { levelId: string | null; parcoursId: string | null; semester: number | null };
+type ClassOption = Option & {
+  levelId: string | null;
+  parcoursId: string | null;
+  semester: number | null;
+  level: { code: string } | null;
+};
 type SubjectOption = Option & {
   curricula: { levelId: string; specialty: string }[];
   elements: { parcoursId: string; semester: number }[];
@@ -111,6 +116,8 @@ export function ScheduleManager() {
   const [importing, setImporting] = useState(false);
   const [week, setWeek] = useState(() => mondayOf(today()));
   const [classFilter, setClassFilter] = useState("");
+  // Matière list: the group's own subjects, unless "Afficher toutes les matières".
+  const [allSubjects, setAllSubjects] = useState(false);
 
   const loadSessions = useCallback(async () => {
     const params = new URLSearchParams({ from: week, to: shift(week, 6) });
@@ -275,17 +282,24 @@ export function ScheduleManager() {
   }
 
   const selectClass = "h-10 rounded-lg border border-border bg-surface px-3 text-sm";
-  // The selected class's own subjects first: the EE of its parcours for its
-  // semester, and its programme (level + spécialité from "1ENR1").
+  // The selected group's subjects: the EE of its parcours for its level (year
+  // of study: S1-S2 → 1, S3-S4 → 2…), plus its programme (level + spécialité).
   const selectedClass = classes.find((item) => item.id === form.classId);
   const classSpecialty = selectedClass ? classParts(selectedClass.name).specialty ?? "" : "";
+  const classYear = selectedClass
+    ? selectedClass.semester
+      ? Math.ceil(selectedClass.semester / 2)
+      : Number(selectedClass.level?.code.match(/(\d+)\s*$/)?.[1] ?? classParts(selectedClass.name).year ?? NaN)
+    : NaN;
+  // Semester of the subject in the group's parcours (for the S1 / S2 groups).
+  const semesterIn = (subject: SubjectOption) =>
+    subject.elements.find(
+      (element) =>
+        element.parcoursId === selectedClass?.parcoursId &&
+        (!Number.isFinite(classYear) || Math.ceil(element.semester / 2) === classYear),
+    )?.semester;
   const inProgramme = (subject: SubjectOption) =>
-    (Boolean(selectedClass?.parcoursId) &&
-      subject.elements.some(
-        (element) =>
-          element.parcoursId === selectedClass?.parcoursId &&
-          (!selectedClass?.semester || element.semester === selectedClass.semester),
-      )) ||
+    (Boolean(selectedClass?.parcoursId) && semesterIn(subject) !== undefined) ||
     (Boolean(selectedClass?.levelId) &&
       subject.curricula.some(
         (entry) =>
@@ -294,6 +308,29 @@ export function ScheduleManager() {
       ));
   const programmeSubjects = subjects.filter(inProgramme);
   const otherSubjects = subjects.filter((subject) => !inProgramme(subject));
+  // Only the group's subjects when it has some (or everything on request).
+  const groupOnly = Boolean(selectedClass) && programmeSubjects.length > 0 && !allSubjects;
+  const programmeGroups = [...new Set(programmeSubjects.map((subject) => semesterIn(subject) ?? 0))]
+    .sort((a, b) => a - b)
+    .map((semester) => ({
+      label: semester ? `${selectedClass?.name} · Semestre ${semester}` : `${selectedClass?.name} · Programme`,
+      items: programmeSubjects.filter((subject) => (semesterIn(subject) ?? 0) === semester),
+    }));
+
+  function chooseClass(classId: string) {
+    const next = classes.find((item) => item.id === classId);
+    setForm((current) => ({ ...current, classId }));
+    setAllSubjects(false);
+    // A subject that is not the new group's is cleared.
+    if (next && form.subjectId) {
+      const subject = subjects.find((item) => item.id === form.subjectId);
+      const keeps =
+        subject &&
+        (subject.elements.some((element) => element.parcoursId === next.parcoursId) ||
+          subject.curricula.some((entry) => entry.levelId === next.levelId));
+      if (!keeps) setForm((current) => ({ ...current, classId, subjectId: "" }));
+    }
+  }
   const weeklyShown = weekly.filter((slot) => !classFilter || slot.classId === classFilter);
   const weekDaysOff = daysOff.filter((item) => item.startDate <= shift(week, 6) && item.endDate >= week);
 
@@ -328,26 +365,30 @@ export function ScheduleManager() {
           ))}
         </div>
 
-        <select required value={form.classId} onChange={(event) => setForm({ ...form, classId: event.target.value })} className={selectClass} aria-label="Classe">
+        <select required value={form.classId} onChange={(event) => chooseClass(event.target.value)} className={selectClass} aria-label="Classe">
           <option value="">Classe</option>
           {classes.map((item) => (
             <option key={item.id} value={item.id}>{item.name}</option>
           ))}
         </select>
         <select required value={form.subjectId} onChange={(event) => setForm({ ...form, subjectId: event.target.value })} className={selectClass} aria-label="Matière">
-          <option value="">Matière</option>
-          {programmeSubjects.length ? (
-            <optgroup label={`Programme de ${selectedClass?.name}`}>
-              {programmeSubjects.map((item) => (
+          <option value="">{selectedClass && !programmeSubjects.length ? "Matière (aucune liée à ce groupe)" : "Matière"}</option>
+          {selectedClass && programmeSubjects.length
+            ? programmeGroups.map((group) => (
+                <optgroup key={group.label} label={group.label}>
+                  {group.items.map((item) => (
+                    <option key={item.id} value={item.id}>{item.code} · {item.name}</option>
+                  ))}
+                </optgroup>
+              ))
+            : null}
+          {!groupOnly ? (
+            <optgroup label={programmeSubjects.length ? "Autres matières" : "Toutes les matières"}>
+              {otherSubjects.map((item) => (
                 <option key={item.id} value={item.id}>{item.code} · {item.name}</option>
               ))}
             </optgroup>
           ) : null}
-          <optgroup label={programmeSubjects.length ? "Autres matières" : "Toutes les matières"}>
-            {otherSubjects.map((item) => (
-              <option key={item.id} value={item.id}>{item.code} · {item.name}</option>
-            ))}
-          </optgroup>
         </select>
         <select required value={form.professorId} onChange={(event) => setForm({ ...form, professorId: event.target.value })} className={selectClass} aria-label="Enseignant">
           <option value="">Enseignant</option>
@@ -390,6 +431,12 @@ export function ScheduleManager() {
             <Button type="button" variant="secondary" onClick={resetForm}>Annuler</Button>
           ) : null}
         </div>
+        {selectedClass && programmeSubjects.length ? (
+          <label className="flex items-center gap-2 text-xs text-muted sm:col-span-2 lg:col-span-4">
+            <input type="checkbox" checked={allSubjects} onChange={(event) => setAllSubjects(event.target.checked)} />
+            Afficher toutes les matières (pas seulement celles du parcours et du niveau de {selectedClass.name})
+          </label>
+        ) : null}
         {form.mode === "weekly" ? (
           <p className="text-xs text-muted sm:col-span-2 lg:col-span-4">
             Les séances sont créées pour chaque semaine (ou une semaine sur deux) du semestre à partir d’aujourd’hui, sauf les jours fériés et vacances. Les semaines A et B sont comptées depuis le début du semestre.
