@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { FileDropZone } from "@/components/ui/file-drop-zone";
 import { Input } from "@/components/ui/input";
 import { CalendarPanel, type DayOff, type Period } from "@/components/schedule/calendar-panel";
-import { classParts } from "@/lib/class-name";
+import { isGroupSubject, semesterInGroup } from "@/lib/group-subjects";
 
 type Option = { id: string; name: string; code?: string; email?: string };
 type ClassOption = Option & {
@@ -283,29 +283,10 @@ export function ScheduleManager() {
 
   const selectClass = "h-10 rounded-lg border border-border bg-surface px-3 text-sm";
   // The selected group's subjects: the EE of its parcours for its level (year
-  // of study: S1-S2 → 1, S3-S4 → 2…), plus its programme (level + spécialité).
+  // of study: S1-S2 → 1, S3-S4 → 2…), plus its programme (lib/group-subjects).
   const selectedClass = classes.find((item) => item.id === form.classId);
-  const classSpecialty = selectedClass ? classParts(selectedClass.name).specialty ?? "" : "";
-  const classYear = selectedClass
-    ? selectedClass.semester
-      ? Math.ceil(selectedClass.semester / 2)
-      : Number(selectedClass.level?.code.match(/(\d+)\s*$/)?.[1] ?? classParts(selectedClass.name).year ?? NaN)
-    : NaN;
-  // Semester of the subject in the group's parcours (for the S1 / S2 groups).
-  const semesterIn = (subject: SubjectOption) =>
-    subject.elements.find(
-      (element) =>
-        element.parcoursId === selectedClass?.parcoursId &&
-        (!Number.isFinite(classYear) || Math.ceil(element.semester / 2) === classYear),
-    )?.semester;
-  const inProgramme = (subject: SubjectOption) =>
-    (Boolean(selectedClass?.parcoursId) && semesterIn(subject) !== undefined) ||
-    (Boolean(selectedClass?.levelId) &&
-      subject.curricula.some(
-        (entry) =>
-          entry.levelId === selectedClass?.levelId &&
-          (entry.specialty === "" || entry.specialty === classSpecialty),
-      ));
+  const semesterIn = (subject: SubjectOption) => (selectedClass ? semesterInGroup(subject, selectedClass) : undefined);
+  const inProgramme = (subject: SubjectOption) => Boolean(selectedClass) && isGroupSubject(subject, selectedClass!);
   const programmeSubjects = subjects.filter(inProgramme);
   const otherSubjects = subjects.filter((subject) => !inProgramme(subject));
   // Only the group's subjects when it has some (or everything on request).

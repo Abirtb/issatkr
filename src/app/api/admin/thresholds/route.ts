@@ -15,10 +15,15 @@ const schema = z.object({
 export async function GET() {
   try {
     await requireAdmin();
-    const [subjects, levels, thresholds] = await Promise.all([
+    const [subjects, levels, thresholds, parcours, classes] = await Promise.all([
       prisma.subject.findMany({
         where: { active: true },
         orderBy: { name: "asc" },
+        // Links used by the Parcours / Groupe filters.
+        include: {
+          elements: { select: { parcoursId: true, semester: true } },
+          curricula: { select: { levelId: true, specialty: true } },
+        },
       }),
       prisma.academicLevel.findMany({
         where: { active: true },
@@ -28,8 +33,16 @@ export async function GET() {
         include: { subject: true, level: true },
         orderBy: [{ subject: { name: "asc" } }, { level: { name: "asc" } }],
       }),
+      prisma.parcours.findMany({
+        select: { id: true, code: true, mention: true, specialty: true },
+        orderBy: { code: "asc" },
+      }),
+      prisma.class.findMany({
+        select: { id: true, name: true, levelId: true, parcoursId: true, semester: true, level: { select: { code: true } } },
+        orderBy: { name: "asc" },
+      }),
     ]);
-    return NextResponse.json({ subjects, levels, thresholds });
+    return NextResponse.json({ subjects, levels, thresholds, parcours, classes });
   } catch (error) {
     const denied = authFailure(error);
     if (denied) return denied;
