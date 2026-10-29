@@ -14,6 +14,8 @@ type ClassOption = Option & {
   parcoursId: string | null;
   semester: number | null;
   level: { code: string } | null;
+  // Sub-groups found among the class's students (TP1, TP2…).
+  subgroups: string[];
 };
 type SubjectOption = Option & {
   curricula: { levelId: string; specialty: string }[];
@@ -29,6 +31,7 @@ type ScheduleRow = {
   startTime: string;
   endTime: string | null;
   room: string | null;
+  subgroup: string;
   finalizedAt: string | null;
   class: Option;
   professor: Option | null;
@@ -47,6 +50,7 @@ type WeeklyRow = {
   startTime: string;
   endTime: string | null;
   room: string | null;
+  subgroup: string;
   period: { id: string; name: string };
   class: Option;
   subject: Option;
@@ -101,6 +105,8 @@ const emptyForm = {
   startTime: "08:30",
   endTime: "10:00",
   room: "",
+  // "" = the whole class.
+  subgroup: "",
 };
 
 export function ScheduleManager() {
@@ -218,6 +224,7 @@ export function ScheduleManager() {
       startTime: session.startTime,
       endTime: session.endTime ?? "",
       room: session.room ?? "",
+      subgroup: session.subgroup,
     });
     if (session.weeklySlotId) {
       setMessage("Cette séance vient d’un cours hebdomadaire : la modifier ne change que cette date.");
@@ -239,6 +246,7 @@ export function ScheduleManager() {
       startTime: slot.startTime,
       endTime: slot.endTime ?? "",
       room: slot.room ?? "",
+      subgroup: slot.subgroup,
     });
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
@@ -300,7 +308,7 @@ export function ScheduleManager() {
 
   function chooseClass(classId: string) {
     const next = classes.find((item) => item.id === classId);
-    setForm((current) => ({ ...current, classId }));
+    setForm((current) => ({ ...current, classId, subgroup: "" }));
     setAllSubjects(false);
     // A subject that is not the new group's is cleared.
     if (next && form.subjectId) {
@@ -309,7 +317,7 @@ export function ScheduleManager() {
         subject &&
         (subject.elements.some((element) => element.parcoursId === next.parcoursId) ||
           subject.curricula.some((entry) => entry.levelId === next.levelId));
-      if (!keeps) setForm((current) => ({ ...current, classId, subjectId: "" }));
+      if (!keeps) setForm((current) => ({ ...current, classId, subgroup: "", subjectId: "" }));
     }
   }
   const weeklyShown = weekly.filter((slot) => !classFilter || slot.classId === classFilter);
@@ -404,6 +412,14 @@ export function ScheduleManager() {
         <Input required type="time" value={form.startTime} onChange={(event) => setForm({ ...form, startTime: event.target.value })} aria-label="Début" />
         <Input type="time" value={form.endTime} onChange={(event) => setForm({ ...form, endTime: event.target.value })} aria-label="Fin" />
         <Input placeholder="Salle (facultatif)" value={form.room} onChange={(event) => setForm({ ...form, room: event.target.value })} />
+        {selectedClass?.subgroups.length || form.subgroup ? (
+          <select value={form.subgroup} onChange={(event) => setForm({ ...form, subgroup: event.target.value })} className={selectClass} aria-label="Sous-groupe">
+            <option value="">Groupe entier</option>
+            {[...new Set([...(selectedClass?.subgroups ?? []), form.subgroup].filter(Boolean))].map((item) => (
+              <option key={item} value={item}>Sous-groupe {item} seulement</option>
+            ))}
+          </select>
+        ) : null}
         <div className="flex gap-2">
           <Button type="submit" className="flex-1">
             {form.id ? "Enregistrer" : form.mode === "weekly" ? "Ajouter le cours" : "Ajouter la séance"}
@@ -462,6 +478,7 @@ export function ScheduleManager() {
                 <p className="font-medium">
                   {weekdays[slot.weekday]} {slot.startTime}
                   {slot.endTime ? `–${slot.endTime}` : ""} · {slot.subject.name} · {slot.class.name}
+                  {slot.subgroup ? ` (${slot.subgroup})` : ""}
                   {frequencyLabel(slot)}
                 </p>
                 <p className="text-sm text-muted">
@@ -501,6 +518,7 @@ export function ScheduleManager() {
               <div className="min-w-0 basis-full sm:basis-auto sm:flex-1">
                 <p className="font-medium">
                   {session.subject?.name ?? session.class.name} · {session.class.name}
+                  {session.subgroup ? ` (${session.subgroup})` : ""}
                 </p>
                 <p className="text-sm text-muted">
                   {new Date(session.date).toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "short" })} ·{" "}

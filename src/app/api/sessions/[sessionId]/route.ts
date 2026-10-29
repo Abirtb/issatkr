@@ -8,6 +8,17 @@ import { recalculateAlertsForStudents } from "@/lib/alerts";
 import { sendPendingNotifications } from "@/lib/mail";
 import { getAttendanceWindow } from "@/lib/attendance-window";
 import { isExempt } from "@/lib/student-status";
+import { getAllowedNetworks } from "@/lib/settings";
+import { ipAllowed } from "@/lib/network";
+import { clientIp } from "@/lib/rate-limit";
+
+// Teachers take the roll call at the fac only: on one of the networks set in
+// Paramètres (none set: anywhere). Administrators are not restricted.
+async function onFacNetwork(req: Request, role: string) {
+  return role === "ADMIN" || ipAllowed(clientIp(req), await getAllowedNetworks());
+}
+const OFF_NETWORK =
+  "Appel impossible hors de la faculté : connectez-vous au WiFi de la faculté puis réessayez.";
 
 const marksSchema = z.object({
   marks: z
@@ -17,7 +28,7 @@ const marksSchema = z.object({
 });
 
 export async function GET(
-  _req: Request,
+  req: Request,
   { params }: { params: Promise<{ sessionId: string }> },
 ) {
   try {
@@ -39,8 +50,9 @@ export async function GET(
     });
     if (!session) return NextResponse.json({ error: "Introuvable" }, { status: 404 });
 
+    // A sub-group session (TP1…) lists only the students of that sub-group.
     const students = await prisma.student.findMany({
-      where: { classId: session.classId, active: true },
+      where: { classId: session.classId, active: true, ...(session.subgroup ? { subgroup: session.subgroup } : {}) },
       select: { id: true, matricule: true, firstName: true, lastName: true, status: true },
       orderBy: [{ lastName: "asc" }, { firstName: "asc" }],
     });
@@ -58,6 +70,7 @@ export async function GET(
       window,
       serverNow: new Date(),
       bypassWindow: user.role === "ADMIN",
+      offNetwork: !(await onFacNetwork(req, user.role)),
     });
   } catch (error) {
     const denied = authFailure(error);
@@ -85,10 +98,13 @@ export async function PUT(
 
     const session = await prisma.session.findUnique({
       where: { id: sessionId },
-      select: { classId: true, subjectId: true, date: true, startTime: true, endTime: true },
+      select: { classId: true, subjectId: true, date: true, startTime: true, endTime: true, subgroup: true },
     });
     if (!session) {
       return NextResponse.json({ error: "Introuvable" }, { status: 404 });
+    }
+    if (!(await onFacNetwork(req, user.role))) {
+      return NextResponse.json({ error: OFF_NETWORK }, { status: 403 });
     }
     if (user.role !== "ADMIN") {
       const window = getAttendanceWindow(session.date, session.startTime, session.endTime);
@@ -111,6 +127,7 @@ export async function PUT(
         id: { in: uniqueStudentIds },
         classId: session.classId,
         active: true,
+        ...(session.subgroup ? { subgroup: session.subgroup } : {}),
       },
       select: { id: true, status: true },
     });

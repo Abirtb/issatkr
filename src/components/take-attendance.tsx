@@ -37,6 +37,7 @@ export function TakeAttendance() {
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState("");
   const [isAdmin, setIsAdmin] = useState(false);
+  const [offNetwork, setOffNetwork] = useState(false);
   const [attendanceWindow, setAttendanceWindow] = useState<AttendanceWindow | null>(null);
   const [clockOffset, setClockOffset] = useState(0);
   const [now, setNow] = useState(() => Date.now());
@@ -48,6 +49,7 @@ export function TakeAttendance() {
         setTitle(`${d.session.courseName} · ${d.session.class.name}`);
         setAttendanceWindow(d.window);
         setIsAdmin(Boolean(d.bypassWindow));
+        setOffNetwork(Boolean(d.offNetwork));
         setClockOffset(new Date(d.serverNow).getTime() - Date.now());
         setRows(d.rows);
         const m: Record<string, boolean> = {};
@@ -80,7 +82,7 @@ export function TakeAttendance() {
         : serverNow > closesAt
           ? "closed"
           : "open";
-  const readOnly = loading || (!isAdmin && windowState !== "open");
+  const readOnly = loading || offNetwork || (!isAdmin && windowState !== "open");
 
   function setAll(present: boolean) {
     setMarks(Object.fromEntries(rows.map((r) => [r.student.id, isExempt(r.student.status) ? true : present])));
@@ -126,6 +128,12 @@ export function TakeAttendance() {
           {saving ? "..." : "Enregistrer"}
         </Button>
       </div>
+      {offNetwork ? (
+        <p className="mt-3 rounded-lg border border-red-500/40 bg-red-500/10 p-3 text-sm">
+          Appel impossible hors de la faculté : connectez-vous au WiFi de la
+          faculté, puis rechargez cette page.
+        </p>
+      ) : null}
       {isAdmin ? (
         <p className="mt-3 rounded-lg bg-surface-2 p-3 text-sm text-muted">
           Mode administration : modification possible hors délai.

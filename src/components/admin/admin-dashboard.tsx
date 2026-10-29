@@ -31,7 +31,7 @@ const actions = [
   { href: "/admin/classes", title: "Importer des étudiants", text: "Fichier scolarité et e-mails" },
   { href: "/schedule", title: "Emploi du temps", text: "Ajouter ou importer des séances" },
   { href: "/admin/users", title: "Enseignants", text: "Inviter ou gérer les comptes" },
-  { href: "/admin/attendance", title: "Absences", text: "Consulter et justifier" },
+  { href: "/admin/attendance", title: "Absences & justificatifs", text: "Importer un justificatif (PDF, photo)" },
 ];
 
 export function AdminDashboard() {

@@ -15,3 +15,23 @@ export async function setAbsenceLimit(limit: number) {
     update: { value: String(limit) },
   });
 }
+
+// Fac networks for the teachers' roll call (see lib/network). Empty: no restriction.
+export async function getAllowedNetworks(): Promise<string[]> {
+  const row = await prisma.setting.findUnique({ where: { key: "allowed_networks" } });
+  try {
+    const value = row ? JSON.parse(row.value) : [];
+    return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function setAllowedNetworks(networks: string[]) {
+  const value = JSON.stringify(networks);
+  await prisma.setting.upsert({
+    where: { key: "allowed_networks" },
+    create: { key: "allowed_networks", value },
+    update: { value },
+  });
+}

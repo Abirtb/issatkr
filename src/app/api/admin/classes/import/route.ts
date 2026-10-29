@@ -219,6 +219,8 @@ export async function POST(req: Request) {
                 phone: student.phone || undefined,
                 // The file's status replaces the previous one (D can be lifted).
                 status: student.status || null,
+                // A sub-group set by hand stays unless the file gives one.
+                subgroup: student.subgroup || undefined,
                 active: true,
               },
             });

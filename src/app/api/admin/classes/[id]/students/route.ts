@@ -34,6 +34,13 @@ const studentSchema = z.object({
     .transform((value) => value.toUpperCase() || null)
     .nullable()
     .optional(),
+  // Sub-group inside the class (TP1, TP2…); "" = none.
+  subgroup: z
+    .string()
+    .trim()
+    .max(20)
+    .transform((value) => value.toUpperCase())
+    .optional(),
   classId: z.string().min(1).optional(),
 });
 
@@ -81,6 +88,7 @@ export async function POST(
           email: student.email || null,
           phone: student.phone || null,
           status: student.status ?? null,
+          subgroup: student.subgroup ?? "",
           classId: id,
         },
       });
@@ -220,6 +228,7 @@ export async function PATCH(
         email: student.email || null,
         phone: student.phone || null,
         ...(student.status !== undefined ? { status: student.status } : {}),
+        ...(student.subgroup !== undefined ? { subgroup: student.subgroup } : {}),
       },
     });
     // Dispensé or not: the absence count changes, so do the alerts.

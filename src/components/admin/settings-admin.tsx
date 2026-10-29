@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { isGroupSubject, semesterInGroup, type GroupInfo, type SubjectLinks } from "@/lib/group-subjects";
+import { groupYear, isGroupSubject, semesterInGroup, type GroupInfo, type SubjectLinks } from "@/lib/group-subjects";
 
 type Reference = { id: string; code: string; name: string };
 type SubjectRow = Reference & SubjectLinks;
@@ -56,7 +56,7 @@ export function AdminSettings() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         subjectId,
-        levelId,
+        levelId: effectiveLevelId,
         eliminationCount: limit,
       }),
     });
@@ -91,6 +91,24 @@ export function AdminSettings() {
     : parcoursFilter && parcoursLevels.size
       ? levels.filter((level) => parcoursLevels.has(level.id))
       : levels;
+  // Niveau is not chosen by hand: the group's level, else the level of the
+  // subject (its EE semester → year, the groups of its parcours → level, or
+  // its programme). A choice appears only if several levels are possible.
+  const subject = subjects.find((item) => item.id === subjectId);
+  const levelNumber = (code: string) => Number(code.match(/(\d+)\s*$/)?.[1] ?? NaN);
+  const subjectLevels = new Set<string>();
+  for (const element of subject?.elements ?? []) {
+    const year = Math.ceil(element.semester / 2);
+    const fromGroups = groups.filter((item) => item.parcoursId === element.parcoursId && groupYear(item) === year);
+    if (fromGroups.length) fromGroups.forEach((item) => item.levelId && subjectLevels.add(item.levelId));
+    else levels.filter((level) => /^L/i.test(level.code) && levelNumber(level.code) === year).forEach((level) => subjectLevels.add(level.id));
+  }
+  for (const entry of subject?.curricula ?? []) subjectLevels.add(entry.levelId);
+  const levelChoices = group?.levelId
+    ? [group.levelId]
+    : [...subjectLevels].filter((id) => levelOptions.some((level) => level.id === id));
+  const effectiveLevelId = levelChoices.length === 1 ? levelChoices[0] : levelId;
+  const effectiveLevel = levels.find((level) => level.id === effectiveLevelId);
   const filtering = Boolean(parcoursFilter || groupFilter);
   const shownThresholds = thresholds.filter(
     (threshold) =>
@@ -189,21 +207,29 @@ export function AdminSettings() {
             ))}
           </select>
         </label>
-        <label className="block text-sm">
-          <span className="mb-1 block text-muted">Niveau</span>
-          <select
-            required
-            value={levelId}
-            onChange={(event) => setLevelId(event.target.value)}
-            className="h-10 w-full rounded-lg border border-border bg-surface px-3"
-          >
-            {levelOptions.map((level) => (
-              <option key={level.id} value={level.id}>
-                {level.code} · {level.name}
-              </option>
-            ))}
-          </select>
-        </label>
+        <div className="block text-sm">
+          <span className="mb-1 block text-muted">Niveau (automatique)</span>
+          {levelChoices.length === 1 ? (
+            <p className="flex h-10 items-center rounded-lg border border-border bg-surface-2 px-3 text-muted">
+              {effectiveLevel ? `${effectiveLevel.code} · ${effectiveLevel.name}` : "—"}
+            </p>
+          ) : (
+            // Rare: the level can't be deduced (several or none) → choose it.
+            <select
+              required
+              value={levelId}
+              onChange={(event) => setLevelId(event.target.value)}
+              className="h-10 w-full rounded-lg border border-border bg-surface px-3"
+              aria-label="Niveau"
+            >
+              {(levelChoices.length ? levels.filter((level) => levelChoices.includes(level.id)) : levelOptions).map((level) => (
+                <option key={level.id} value={level.id}>
+                  {level.code} · {level.name}
+                </option>
+              ))}
+            </select>
+          )}
+        </div>
         <label className="block text-sm">
           <span className="mb-1 block text-muted">Nombre d’absences</span>
           <Input
@@ -217,7 +243,7 @@ export function AdminSettings() {
         <Button
           type="submit"
           className="sm:col-span-3"
-          disabled={!subjectId || !levelId}
+          disabled={!subjectId || !effectiveLevelId}
         >
           Enregistrer
         </Button>

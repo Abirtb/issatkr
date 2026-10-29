@@ -24,6 +24,8 @@ const slotSchema = z.object({
   startTime: time,
   endTime: z.union([time, z.literal("")]).optional(),
   room: z.string().trim().max(80).optional(),
+  // "" = the whole class.
+  subgroup: z.string().trim().max(20).optional(),
 });
 
 async function checkReferences(input: z.infer<typeof slotSchema>) {
@@ -51,6 +53,7 @@ function slotData(input: z.infer<typeof slotSchema>) {
     startTime: input.startTime,
     endTime: input.endTime || null,
     room: input.room || null,
+    subgroup: input.subgroup ?? "",
   };
 }
 

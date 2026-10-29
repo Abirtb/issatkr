@@ -17,7 +17,7 @@ export async function GET() {
     return NextResponse.json(
       await prisma.subject.findMany({
         include: {
-          _count: { select: { sessions: true } },
+          _count: { select: { sessions: true, elements: true } },
           curricula: {
             select: { id: true, specialty: true, level: { select: { code: true } } },
           },
@@ -58,6 +58,18 @@ export async function PATCH(req: Request) {
     const input = schema.parse(await req.json());
     if (!input.id) {
       return NextResponse.json({ error: "ID requis" }, { status: 400 });
+    }
+    // An EE's code is its official identifier (Identifiant EE): never changed here.
+    const current = await prisma.subject.findUnique({
+      where: { id: input.id },
+      select: { code: true, _count: { select: { elements: true } } },
+    });
+    if (!current) return NextResponse.json({ error: "Matière introuvable" }, { status: 404 });
+    if (current._count.elements && input.code.toUpperCase() !== current.code) {
+      return NextResponse.json(
+        { error: "Le code d’un élément d’enseignement (EE) ne peut pas être modifié : il vient du fichier officiel du parcours." },
+        { status: 400 },
+      );
     }
     return NextResponse.json(
       await prisma.subject.update({

@@ -15,6 +15,8 @@ export type EnrollmentStudent = {
   phone: string;
   // "Statut" column (N, R, D…); D = dispensé d'assiduité.
   status: string;
+  // Optional "Sous-groupe" column (TP1, TP2…).
+  subgroup?: string;
 };
 
 export type EnrollmentGroup = {
@@ -167,6 +169,7 @@ export function parseEnrollmentWorkbook(buffer: ArrayBuffer): EnrollmentGroup[] 
     const emailColumn = column("Email", "E-mail");
     const phoneColumn = column("Telephone Portable", "Téléphone Portable");
     const statusColumn = column("Statut");
+    const subgroupColumn = column("Sous-groupe", "Sous groupe", "Groupe TP", "Sous-groupe TP");
 
     const name =
       findMetadata(metadataRows, "Nom Groupe") || sheetName.trim();
@@ -187,6 +190,7 @@ export function parseEnrollmentWorkbook(buffer: ArrayBuffer): EnrollmentGroup[] 
           email: valueAt(row, emailColumn).toLowerCase(),
           phone: valueAt(row, phoneColumn),
           status: valueAt(row, statusColumn).toUpperCase(),
+          subgroup: valueAt(row, subgroupColumn).toUpperCase().slice(0, 20),
         };
       })
       .filter(

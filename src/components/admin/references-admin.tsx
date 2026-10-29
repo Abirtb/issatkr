@@ -13,7 +13,8 @@ type ReferenceRow = {
   code: string;
   name: string;
   active: boolean;
-  _count: { sessions?: number; classes?: number };
+  // elements > 0: an EE of an imported parcours (official code, read-only).
+  _count: { sessions?: number; classes?: number; elements?: number };
   // Subjects only: the programmes it belongs to.
   curricula?: { id: string; specialty: string; level: { code: string } }[];
 };
@@ -214,6 +215,13 @@ Impossible s’il est déjà utilisé : désactivez-le dans ce cas.`,
             onChange={(event) =>
               setEditing({ ...editing, code: event.target.value })
             }
+            disabled={Boolean(editing._count.elements)}
+            title={
+              editing._count.elements
+                ? "Identifiant officiel de l’EE (fichier du parcours) : non modifiable"
+                : undefined
+            }
+            className={editing._count.elements ? "cursor-not-allowed bg-surface-2 text-muted" : undefined}
           />
           <Input
             required

@@ -35,6 +35,8 @@ type StudentRow = {
   email: string | null;
   phone: string | null;
   status: string | null;
+  // TP1, TP2…; "" = none.
+  subgroup: string;
   classId?: string;
 };
 
@@ -46,6 +48,7 @@ const emptyStudent = {
   email: "",
   phone: "",
   status: "",
+  subgroup: "",
 };
 
 // Statut of the scolarité file. D = dispensé: greyed out for the teacher,
@@ -851,11 +854,23 @@ export function AdminClasses() {
                     value={studentForm.status}
                     onChange={(status) => setStudentForm({ ...studentForm, status })}
                   />
+                  <Input
+                    value={studentForm.subgroup}
+                    onChange={(event) => setStudentForm({ ...studentForm, subgroup: event.target.value })}
+                    placeholder="Sous-groupe (TP1…)"
+                    aria-label="Sous-groupe"
+                    list="subgroup-options"
+                  />
                   <Button type="submit" variant="gold" size="sm">
                     Ajouter étudiant
                   </Button>
                 </form>
 
+                <datalist id="subgroup-options">
+                  {[...new Set(students.map((student) => student.subgroup).filter(Boolean))].sort().map((item) => (
+                    <option key={item} value={item} />
+                  ))}
+                </datalist>
                 <div className="mt-5 overflow-x-auto rounded-lg border border-border">
                   <table className="w-full min-w-[620px] text-sm">
                     <thead className="bg-surface-2 text-left text-muted">
@@ -866,6 +881,7 @@ export function AdminClasses() {
                         <th className="px-3 py-2">CIN</th>
                         <th className="px-3 py-2">E-mail</th>
                         <th className="px-3 py-2">Statut</th>
+                        <th className="px-3 py-2">Sous-groupe</th>
                         <th className="px-3 py-2 text-right">Actions</th>
                       </tr>
                     </thead>
@@ -889,6 +905,7 @@ export function AdminClasses() {
                               ? "D · dispensé"
                               : student.status || "—"}
                           </td>
+                          <td className="px-3 py-2">{student.subgroup || "—"}</td>
                           <td className="space-x-2 whitespace-nowrap px-3 py-1 text-right">
                             <Link
                               href={`/admin/students/${student.id}`}
@@ -999,6 +1016,15 @@ export function AdminClasses() {
                       onChange={(status) =>
                         setEditingStudent({ ...editingStudent, status })
                       }
+                    />
+                    <Input
+                      value={editingStudent.subgroup ?? ""}
+                      onChange={(event) =>
+                        setEditingStudent({ ...editingStudent, subgroup: event.target.value })
+                      }
+                      placeholder="Sous-groupe (TP1…)"
+                      aria-label="Sous-groupe"
+                      list="subgroup-options"
                     />
                     <select
                       value={editingStudent.classId ?? openId ?? ""}

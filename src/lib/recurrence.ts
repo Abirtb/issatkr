@@ -119,6 +119,7 @@ export async function syncWeeklySlot(
       startTime: true,
       endTime: true,
       room: true,
+      subgroup: true,
       _count: { select: { attendances: true } },
     },
   });
@@ -131,6 +132,7 @@ export async function syncWeeklySlot(
     startTime: slot.startTime,
     endTime: slot.endTime,
     room: slot.room,
+    subgroup: slot.subgroup,
   };
   const covered = new Set<string>();
   for (const session of existing) {
@@ -157,6 +159,7 @@ export async function syncWeeklySlot(
         courseName: fields.courseName,
         date: session.date,
         startTime: fields.startTime,
+        subgroup: fields.subgroup,
       },
       select: { id: true },
     });
@@ -173,7 +176,7 @@ export async function syncWeeklySlot(
     const date = scheduleDate(key);
     // Same class, course and start already planned (e.g. a one-off session).
     const clash = await tx.session.findFirst({
-      where: { classId: fields.classId, courseName: fields.courseName, date, startTime: fields.startTime },
+      where: { classId: fields.classId, courseName: fields.courseName, date, startTime: fields.startTime, subgroup: fields.subgroup },
       select: { id: true },
     });
     if (clash) {

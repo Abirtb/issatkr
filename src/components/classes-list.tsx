@@ -10,6 +10,7 @@ type TodaySession = {
   startTime: string;
   endTime: string | null;
   room: string | null;
+  subgroup: string;
   finalizedAt: string | null;
   class: { id: string; name: string; _count: { students: number } };
   professor?: { name: string } | null;
@@ -91,7 +92,8 @@ export function ClassesList() {
               </div>
               <div className="min-w-0 flex-1">
                 <p className="font-semibold">
-                  {session.class.name} · {session.courseName}
+                  {session.class.name}
+                  {session.subgroup ? ` (${session.subgroup})` : ""} · {session.courseName}
                 </p>
                 <p className="text-sm text-muted">
                   {session.class._count.students} étudiants

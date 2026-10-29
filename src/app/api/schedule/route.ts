@@ -16,6 +16,8 @@ const sessionSchema = z.object({
     .union([z.string().regex(/^\d{2}:\d{2}$/), z.literal("")])
     .optional(),
   room: z.string().trim().max(80).optional(),
+  // "" = the whole class.
+  subgroup: z.string().trim().max(20).optional(),
 });
 
 // A one-off session on a holiday is allowed (e.g. a make-up class), with a warning.
@@ -113,6 +115,7 @@ export async function POST(req: Request) {
         startTime: input.startTime,
         endTime: input.endTime || null,
         room: input.room || null,
+        subgroup: input.subgroup ?? "",
       },
     });
     // Actor = the logged-in user (never the request body); professorId = assigned teacher.
@@ -163,6 +166,7 @@ export async function PATCH(req: Request) {
         startTime: input.startTime,
         endTime: input.endTime || null,
         room: input.room || null,
+        subgroup: input.subgroup ?? "",
       },
     });
     await audit(actor, "schedule.update", { type: "session", id: session.id }, {

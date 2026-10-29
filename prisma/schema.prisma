@@ -126,6 +126,9 @@ model Student {
   // "Statut" of the scolarité file (N, R, D…). D = dispensé: never absent,
   // his absences always count 0.
   status        String?
+  // Sub-group inside the class (TP1, TP2…); "" = none. A session given to a
+  // sub-group only lists its students.
+  subgroup      String            @default("")
   active        Boolean           @default(true)
   classId       String
   class         Class             @relation(fields: [classId], references: [id], onDelete: Cascade)
@@ -152,6 +155,8 @@ model Session {
   startTime    String
   endTime      String?
   room         String?
+  // "" = the whole class; else only the students of this sub-group.
+  subgroup     String       @default("")
   createdAt    DateTime     @default(now())
   finalizedAt  DateTime?
   // Set when the session was generated from a weekly course.
@@ -159,7 +164,7 @@ model Session {
   weeklySlot   WeeklySlot?  @relation(fields: [weeklySlotId], references: [id], onDelete: SetNull)
   attendances  Attendance[]
 
-  @@unique([classId, courseName, date, startTime])
+  @@unique([classId, courseName, date, startTime, subgroup])
   @@index([classId, date])
   @@index([professorId, date])
   @@index([subjectId, date])
@@ -204,6 +209,8 @@ model WeeklySlot {
   startTime     String
   endTime       String?
   room          String?
+  // "" = the whole class; else only this sub-group (TP1, TP2…).
+  subgroup      String         @default("")
   // 1 = every week, 2 = every other week. With 2, weekOffset picks the weeks
   // (0: 1st, 3rd… week of the period; 1: 2nd, 4th…).
   intervalWeeks Int            @default(1)

@@ -106,11 +106,18 @@ export function AdminAttendance() {
 
   return (
     <div>
-      <h1 className="text-2xl font-semibold">Absences</h1>
-      <p className="mt-1 text-sm text-muted">
-        Importez un justificatif (PDF ou image) pour justifier une absence, ou
-        corrigez une saisie.
-      </p>
+      <h1 className="text-2xl font-semibold">Absences &amp; justificatifs</h1>
+      <div className="mt-3 max-w-3xl rounded-xl border border-gold/50 bg-gold/10 p-4 text-sm">
+        <p className="font-medium">Justifier une absence</p>
+        <ol className="mt-1 list-decimal space-y-0.5 pl-5">
+          <li>Cherchez l’étudiant (nom, matricule ou CIN).</li>
+          <li>
+            Sur l’absence concernée, cliquez sur <strong>« Importer le justificatif »</strong>{" "}
+            et choisissez le document (PDF ou photo, certificat médical…).
+          </li>
+          <li>L’absence devient « Absence justifiée » ; vous pouvez préciser le motif.</li>
+        </ol>
+      </div>
       <form
         className="mt-4 flex flex-wrap gap-2"
         onSubmit={(event) => {
@@ -204,7 +211,7 @@ export function AdminAttendance() {
                           ? "Envoi…"
                           : a.justificationFile
                             ? "Remplacer le justificatif"
-                            : "Importer justificatif"}
+                            : "📎 Importer le justificatif (PDF, photo)"}
                       </span>
                       <input
                         type="file"
