@@ -136,8 +136,7 @@ export function TakeAttendance() {
           Appel impossible hors de la faculté : connectez-vous au WiFi de la
           faculté, puis rechargez cette page.
         </p>
-      ) : null}
-      {isAdmin ? (
+      ) : isAdmin ? (
         <p className="mt-3 rounded-lg bg-surface-2 p-3 text-sm text-muted">
           Mode administration : modification possible hors délai.
         </p>
@@ -190,7 +189,7 @@ export function TakeAttendance() {
                 disabled={readOnly}
                 onClick={() => setMarks((m) => ({ ...m, [row.student.id]: true }))}
                 className={cn(
-                  "h-10 min-w-[88px] rounded-lg text-sm font-medium",
+                  "h-10 min-w-[88px] rounded-lg text-sm font-medium disabled:cursor-not-allowed disabled:opacity-40",
                   marks[row.student.id] ? "bg-navy text-white" : "bg-surface-2 text-muted",
                 )}
               >
@@ -201,7 +200,7 @@ export function TakeAttendance() {
                 disabled={readOnly}
                 onClick={() => setMarks((m) => ({ ...m, [row.student.id]: false }))}
                 className={cn(
-                  "h-10 min-w-[88px] rounded-lg text-sm font-medium",
+                  "h-10 min-w-[88px] rounded-lg text-sm font-medium disabled:cursor-not-allowed disabled:opacity-40",
                   !marks[row.student.id] ? "bg-[#4a5568] text-white" : "bg-surface-2 text-muted",
                 )}
               >
