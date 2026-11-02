@@ -157,6 +157,8 @@ model Session {
   room         String?
   // "" = the whole class; else only the students of this sub-group.
   subgroup     String       @default("")
+  // COURS, TD or TP (lib/session-kind); "" = not given.
+  kind         String       @default("")
   createdAt    DateTime     @default(now())
   finalizedAt  DateTime?
   // Set when the session was generated from a weekly course.
@@ -211,6 +213,8 @@ model WeeklySlot {
   room          String?
   // "" = the whole class; else only this sub-group (TP1, TP2…).
   subgroup      String         @default("")
+  // COURS, TD or TP (lib/session-kind).
+  kind          String         @default("")
   // 1 = every week, 2 = every other week. With 2, weekOffset picks the weeks
   // (0: 1st, 3rd… week of the period; 1: 2nd, 4th…).
   intervalWeeks Int            @default(1)

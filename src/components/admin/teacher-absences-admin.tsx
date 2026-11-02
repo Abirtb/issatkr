@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { kindLabel } from "@/lib/session-kind";
 
 type Row = {
   sessionId: string;
@@ -12,6 +13,8 @@ type Row = {
   courseName: string;
   courseCode: string | null;
   room: string | null;
+  kind: string;
+  subgroup: string;
   className: string;
   professorId: string | null;
   professorName: string | null;
@@ -134,11 +137,15 @@ export function TeacherAbsencesAdmin() {
             {shown.map((row) => (
               <div key={row.sessionId} className="surface-card rounded-xl p-3 text-sm">
                 <p className="font-medium">
-                  {row.professorName ?? "Enseignant non affecté"} · {row.courseName}
+                  {new Date(row.date).toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}
+                  {" · "}
+                  {row.courseName}
+                  {row.kind ? ` (${kindLabel(row.kind)})` : ""}
                 </p>
                 <p className="text-muted">
-                  {new Date(row.date).toLocaleDateString("fr-FR")} · {row.startTime}
+                  {row.professorName ?? "Enseignant non affecté"} · {row.startTime}
                   {row.endTime ? `–${row.endTime}` : ""} · {row.className}
+                  {row.subgroup ? ` (${row.subgroup})` : ""}
                   {row.room ? ` · salle ${row.room}` : ""}
                 </p>
               </div>

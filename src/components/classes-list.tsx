@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import { kindLabel } from "@/lib/session-kind";
 import { Badge } from "@/components/ui/badge";
 
 type TodaySession = {
@@ -11,6 +12,7 @@ type TodaySession = {
   endTime: string | null;
   room: string | null;
   subgroup: string;
+  kind: string;
   finalizedAt: string | null;
   class: { id: string; name: string; _count: { students: number } };
   professor?: { name: string } | null;
@@ -94,6 +96,7 @@ export function ClassesList() {
                 <p className="font-semibold">
                   {session.class.name}
                   {session.subgroup ? ` (${session.subgroup})` : ""} · {session.courseName}
+                  {session.kind ? ` · ${kindLabel(session.kind)}` : ""}
                 </p>
                 <p className="text-sm text-muted">
                   {session.class._count.students} étudiants

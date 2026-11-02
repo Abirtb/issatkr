@@ -266,6 +266,8 @@ export function parseEmploiRows(rows: Row[]) {
       const startTime = pick(row, ["heure_debut", "debut", "start", "start_time", "heure"]);
       const endTime = pick(row, ["heure_fin", "fin", "end", "end_time"]);
       const room = pick(row, ["salle", "room", "local"]);
+      // Cours / TD / TP.
+      const kind = pick(row, ["type", "nature", "type_seance", "nature_seance"]);
       const professorEmail = pick(row, [
         "enseignant_email",
         "email_enseignant",
@@ -281,6 +283,7 @@ export function parseEmploiRows(rows: Row[]) {
         startTime,
         endTime,
         room,
+        kind,
         professorEmail,
       };
     })

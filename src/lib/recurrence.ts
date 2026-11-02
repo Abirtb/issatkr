@@ -120,6 +120,7 @@ export async function syncWeeklySlot(
       endTime: true,
       room: true,
       subgroup: true,
+      kind: true,
       _count: { select: { attendances: true } },
     },
   });
@@ -133,6 +134,7 @@ export async function syncWeeklySlot(
     endTime: slot.endTime,
     room: slot.room,
     subgroup: slot.subgroup,
+    kind: slot.kind,
   };
   const covered = new Set<string>();
   for (const session of existing) {

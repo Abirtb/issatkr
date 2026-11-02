@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
+import { kindLabel } from "@/lib/session-kind";
 
 type Session = {
   id: string;
@@ -11,6 +12,8 @@ type Session = {
   date: string;
   startTime: string;
   room: string | null;
+  kind: string;
+  subgroup: string;
 };
 
 export function ClassSessions() {
@@ -51,7 +54,11 @@ export function ClassSessions() {
               className="surface-card flex items-center justify-between rounded-xl px-4 py-3 hover:ring-1 hover:ring-gold/40"
             >
               <div>
-                <p className="font-medium">{s.courseName}</p>
+                <p className="font-medium">
+                  {s.courseName}
+                  {s.kind ? ` · ${kindLabel(s.kind)}` : ""}
+                  {s.subgroup ? ` (${s.subgroup})` : ""}
+                </p>
                 <p className="text-sm text-muted">
                   {new Date(s.date).toLocaleDateString("fr-FR")} · {s.startTime}
                   {s.room ? ` · ${s.room}` : ""}
@@ -75,7 +82,10 @@ export function ClassSessions() {
                 className="flex items-center justify-between rounded-xl border border-border px-4 py-3"
               >
                 <div>
-                  <p className="font-medium">{session.courseName}</p>
+                  <p className="font-medium">
+                    {session.courseName}
+                    {session.kind ? ` · ${kindLabel(session.kind)}` : ""}
+                  </p>
                   <p className="text-sm text-muted">
                     {new Date(session.date).toLocaleDateString("fr-FR")} ·{" "}
                     {session.startTime}

@@ -9,6 +9,7 @@ import {
   syncWeeklySlot,
 } from "@/lib/recurrence";
 import { audit } from "@/lib/security-log";
+import { allowedKinds, kindLabel, SESSION_KINDS } from "@/lib/session-kind";
 
 const time = z.string().regex(/^\d{2}:\d{2}$/);
 const slotSchema = z.object({
@@ -26,19 +27,31 @@ const slotSchema = z.object({
   room: z.string().trim().max(80).optional(),
   // "" = the whole class.
   subgroup: z.string().trim().max(20).optional(),
+  // Cours, TD or TP: one the EE of the parcours plans hours for.
+  kind: z.enum(SESSION_KINDS, { message: "Choisissez le type de séance : Cours, TD ou TP" }),
 });
+// A Cours / TD / TP the EE plans no hours for.
+class KindError extends Error {
+  constructor(kind: string) {
+    super(`Pas de ${kindLabel(kind)} prévu pour cette matière dans le parcours (0 h dans l’élément d’enseignement).`);
+  }
+}
 
 async function checkReferences(input: z.infer<typeof slotSchema>) {
   const [period, cls, professor, subject] = await Promise.all([
     prisma.academicPeriod.findUnique({ where: { id: input.periodId }, select: { id: true } }),
-    prisma.class.findUnique({ where: { id: input.classId }, select: { id: true } }),
+    prisma.class.findUnique({ where: { id: input.classId }, select: { id: true, parcoursId: true } }),
     prisma.user.findFirst({
       where: { id: input.professorId, active: true, role: { in: ["PROF", "DEPARTMENT_HEAD"] } },
       select: { id: true },
     }),
-    prisma.subject.findFirst({ where: { id: input.subjectId, active: true }, select: { id: true } }),
+    prisma.subject.findFirst({
+      where: { id: input.subjectId, active: true },
+      select: { id: true, elements: { select: { parcoursId: true, hoursLecture: true, hoursTutorial: true, hoursLab: true } } },
+    }),
   ]);
   if (!period || !cls || !professor || !subject) throw new Error("INVALID_REFERENCE");
+  if (!allowedKinds(subject.elements, cls.parcoursId).includes(input.kind)) throw new KindError(input.kind);
 }
 
 function slotData(input: z.infer<typeof slotSchema>) {
@@ -54,6 +67,7 @@ function slotData(input: z.infer<typeof slotSchema>) {
     endTime: input.endTime || null,
     room: input.room || null,
     subgroup: input.subgroup ?? "",
+    kind: input.kind,
   };
 }
 
@@ -93,7 +107,11 @@ export async function POST(req: Request) {
     const denied = authFailure(error);
     if (denied) return denied;
     const message =
-      error instanceof z.ZodError ? error.issues[0]?.message : "Cours hebdomadaire invalide";
+      error instanceof z.ZodError
+        ? error.issues[0]?.message
+        : error instanceof KindError
+          ? error.message
+          : "Cours hebdomadaire invalide";
     return NextResponse.json({ error: message }, { status: 400 });
   }
 }
@@ -115,7 +133,13 @@ export async function PATCH(req: Request) {
   } catch (error) {
     const denied = authFailure(error);
     if (denied) return denied;
-    return NextResponse.json({ error: "Modification impossible" }, { status: 400 });
+    const message =
+      error instanceof z.ZodError
+        ? error.issues[0]?.message
+        : error instanceof KindError
+          ? error.message
+          : "Modification impossible";
+    return NextResponse.json({ error: message }, { status: 400 });
   }
 }
 

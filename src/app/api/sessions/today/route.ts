@@ -28,6 +28,7 @@ export async function GET() {
         endTime: true,
         room: true,
         subgroup: true,
+        kind: true,
         finalizedAt: true,
         class: { select: { id: true, name: true, _count: { select: { students: { where: { active: true } } } } } },
         ...(user.role === "ADMIN" ? { professor: { select: { name: true } } } : {}),

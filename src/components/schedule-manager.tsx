@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { allowedKinds, elementsFor, kindLabel, SESSION_KINDS, type SessionKind } from "@/lib/session-kind";
 import { FileDropZone } from "@/components/ui/file-drop-zone";
 import { Input } from "@/components/ui/input";
 import { CalendarPanel, type DayOff, type Period } from "@/components/schedule/calendar-panel";
@@ -19,7 +20,7 @@ type ClassOption = Option & {
 };
 type SubjectOption = Option & {
   curricula: { levelId: string; specialty: string }[];
-  elements: { parcoursId: string; semester: number }[];
+  elements: { parcoursId: string; semester: number; hoursLecture: number; hoursTutorial: number; hoursLab: number }[];
 };
 type ScheduleRow = {
   id: string;
@@ -32,6 +33,7 @@ type ScheduleRow = {
   endTime: string | null;
   room: string | null;
   subgroup: string;
+  kind: string;
   finalizedAt: string | null;
   class: Option;
   professor: Option | null;
@@ -51,6 +53,7 @@ type WeeklyRow = {
   endTime: string | null;
   room: string | null;
   subgroup: string;
+  kind: string;
   period: { id: string; name: string };
   class: Option;
   subject: Option;
@@ -107,6 +110,8 @@ const emptyForm = {
   room: "",
   // "" = the whole class.
   subgroup: "",
+  // COURS / TD / TP.
+  kind: "",
 };
 
 export function ScheduleManager() {
@@ -225,6 +230,7 @@ export function ScheduleManager() {
       endTime: session.endTime ?? "",
       room: session.room ?? "",
       subgroup: session.subgroup,
+      kind: session.kind,
     });
     if (session.weeklySlotId) {
       setMessage("Cette séance vient d’un cours hebdomadaire : la modifier ne change que cette date.");
@@ -247,6 +253,7 @@ export function ScheduleManager() {
       endTime: slot.endTime ?? "",
       room: slot.room ?? "",
       subgroup: slot.subgroup,
+      kind: slot.kind,
     });
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
@@ -320,6 +327,21 @@ export function ScheduleManager() {
       if (!keeps) setForm((current) => ({ ...current, classId, subgroup: "", subjectId: "" }));
     }
   }
+  // Cours / TD / TP: those the EE of the group's parcours has hours for.
+  const kindChoices = (subjectId: string) => {
+    const subject = subjects.find((item) => item.id === subjectId);
+    return subject ? allowedKinds(subject.elements, selectedClass?.parcoursId) : [...SESSION_KINDS];
+  };
+  function chooseSubject(subjectId: string) {
+    const kinds = kindChoices(subjectId);
+    setForm((current) => ({
+      ...current,
+      subjectId,
+      kind: kinds.length === 1 ? kinds[0] : kinds.includes(current.kind as SessionKind) ? current.kind : "",
+    }));
+  }
+  const selectedSubject = subjects.find((item) => item.id === form.subjectId);
+  const subjectHours = selectedSubject ? elementsFor(selectedSubject.elements, selectedClass?.parcoursId)[0] : undefined;
   const weeklyShown = weekly.filter((slot) => !classFilter || slot.classId === classFilter);
   const weekDaysOff = daysOff.filter((item) => item.startDate <= shift(week, 6) && item.endDate >= week);
 
@@ -360,7 +382,7 @@ export function ScheduleManager() {
             <option key={item.id} value={item.id}>{item.name}</option>
           ))}
         </select>
-        <select required value={form.subjectId} onChange={(event) => setForm({ ...form, subjectId: event.target.value })} className={selectClass} aria-label="Matière">
+        <select required value={form.subjectId} onChange={(event) => chooseSubject(event.target.value)} className={selectClass} aria-label="Matière">
           <option value="">{selectedClass && !programmeSubjects.length ? "Matière (aucune liée à ce groupe)" : "Matière"}</option>
           {selectedClass && programmeSubjects.length
             ? programmeGroups.map((group) => (
@@ -411,6 +433,12 @@ export function ScheduleManager() {
 
         <Input required type="time" value={form.startTime} onChange={(event) => setForm({ ...form, startTime: event.target.value })} aria-label="Début" />
         <Input type="time" value={form.endTime} onChange={(event) => setForm({ ...form, endTime: event.target.value })} aria-label="Fin" />
+        <select required value={form.kind} onChange={(event) => setForm({ ...form, kind: event.target.value })} className={selectClass} aria-label="Type de séance">
+          <option value="">Type : Cours, TD ou TP</option>
+          {kindChoices(form.subjectId).map((kind) => (
+            <option key={kind} value={kind}>{kindLabel(kind)}</option>
+          ))}
+        </select>
         <Input placeholder="Salle (facultatif)" value={form.room} onChange={(event) => setForm({ ...form, room: event.target.value })} />
         {selectedClass?.subgroups.length || form.subgroup ? (
           <select value={form.subgroup} onChange={(event) => setForm({ ...form, subgroup: event.target.value })} className={selectClass} aria-label="Sous-groupe">
@@ -428,6 +456,11 @@ export function ScheduleManager() {
             <Button type="button" variant="secondary" onClick={resetForm}>Annuler</Button>
           ) : null}
         </div>
+        {subjectHours ? (
+          <p className="text-xs text-muted sm:col-span-2 lg:col-span-4">
+            Volume prévu par l’élément d’enseignement : Cours {subjectHours.hoursLecture} h · TD {subjectHours.hoursTutorial} h · TP {subjectHours.hoursLab} h
+          </p>
+        ) : null}
         {selectedClass && programmeSubjects.length ? (
           <label className="flex items-center gap-2 text-xs text-muted sm:col-span-2 lg:col-span-4">
             <input type="checkbox" checked={allSubjects} onChange={(event) => setAllSubjects(event.target.checked)} />
@@ -477,7 +510,10 @@ export function ScheduleManager() {
               <div className="min-w-0 basis-full sm:basis-auto sm:flex-1">
                 <p className="font-medium">
                   {weekdays[slot.weekday]} {slot.startTime}
-                  {slot.endTime ? `–${slot.endTime}` : ""} · {slot.subject.name} · {slot.class.name}
+                  {slot.endTime ? `–${slot.endTime}` : ""} · {slot.subject.name}
+                  {slot.kind ? ` · ${kindLabel(slot.kind)}` : ""} · {slot.class.name}
+                  {/* Courses planned before Cours/TD/TP existed: "Modifier" to set it. */}
+                  {slot.kind ? null : <span className="text-red-600"> · Type à préciser</span>}
                   {slot.subgroup ? ` (${slot.subgroup})` : ""}
                   {frequencyLabel(slot)}
                 </p>
@@ -517,7 +553,8 @@ export function ScheduleManager() {
             <div key={session.id} className="surface-card flex flex-wrap items-center gap-3 rounded-xl p-4">
               <div className="min-w-0 basis-full sm:basis-auto sm:flex-1">
                 <p className="font-medium">
-                  {session.subject?.name ?? session.class.name} · {session.class.name}
+                  {session.subject?.name ?? session.class.name}
+                  {session.kind ? ` · ${kindLabel(session.kind)}` : ""} · {session.class.name}
                   {session.subgroup ? ` (${session.subgroup})` : ""}
                 </p>
                 <p className="text-sm text-muted">

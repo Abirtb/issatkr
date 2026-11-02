@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
 import { isExempt } from "@/lib/student-status";
+import { kindLabel } from "@/lib/session-kind";
 
 type AttendanceWindow = {
   opensAt: string;
@@ -46,7 +47,9 @@ export function TakeAttendance() {
     fetch(`/api/sessions/${sessionId}`)
       .then((r) => r.json())
       .then((d) => {
-        setTitle(`${d.session.courseName} · ${d.session.class.name}`);
+        const kind = kindLabel(d.session.kind);
+        const group = d.session.subgroup ? `${d.session.class.name} (${d.session.subgroup})` : d.session.class.name;
+        setTitle(`${d.session.courseName}${kind ? ` (${kind})` : ""} · ${group}`);
         setAttendanceWindow(d.window);
         setIsAdmin(Boolean(d.bypassWindow));
         setOffNetwork(Boolean(d.offNetwork));

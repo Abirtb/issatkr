@@ -24,7 +24,9 @@ export async function GET() {
         // Programmes, to list a class's own subjects first.
         include: {
           curricula: { select: { levelId: true, specialty: true } },
-          elements: { select: { parcoursId: true, semester: true } },
+          elements: {
+            select: { parcoursId: true, semester: true, hoursLecture: true, hoursTutorial: true, hoursLab: true },
+          },
         },
       }),
       // Sub-groups (TP1, TP2…) found among each class's students.

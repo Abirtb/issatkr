@@ -3,6 +3,7 @@ import { prisma } from "./db";
 import { getAttendanceWindow } from "./attendance-window";
 import { createMailTransport, escapeHtml } from "./mail";
 import { logServerError } from "./security-log";
+import { kindLabel } from "./session-kind";
 
 // A teacher is counted absent for a planned session whose roll call was never
 // taken: the session is over and nothing was saved for it.
@@ -14,6 +15,9 @@ export type TeacherAbsence = {
   courseName: string;
   courseCode: string | null;
   room: string | null;
+  // COURS / TD / TP ("" if not given).
+  kind: string;
+  subgroup: string;
   className: string;
   professorId: string | null;
   professorName: string | null;
@@ -36,6 +40,8 @@ export async function findTeacherAbsences(input: { from?: Date; to?: Date; profe
       courseName: true,
       courseCode: true,
       room: true,
+      kind: true,
+      subgroup: true,
       class: { select: { name: true } },
       professor: { select: { id: true, name: true } },
     },
@@ -53,6 +59,8 @@ export async function findTeacherAbsences(input: { from?: Date; to?: Date; profe
         courseName: session.courseName,
         courseCode: session.courseCode,
         room: session.room,
+        kind: session.kind,
+        subgroup: session.subgroup,
         className: session.class.name,
         professorId: session.professor?.id ?? null,
         professorName: session.professor?.name ?? null,
@@ -64,9 +72,23 @@ const TIME_ZONE = process.env.ATTENDANCE_TIME_ZONE ?? "Africa/Tunis";
 const dayLabel = (date: Date) => new Intl.DateTimeFormat("fr-FR", { timeZone: TIME_ZONE }).format(date);
 const teacherLabel = (row: TeacherAbsence) => row.professorName ?? "Enseignant non affecté";
 const hours = (row: TeacherAbsence) => (row.endTime ? `${row.startTime}–${row.endTime}` : row.startTime);
+const weekday = (date: Date) => new Intl.DateTimeFormat("fr-FR", { timeZone: TIME_ZONE, weekday: "long" }).format(date);
+const groupLabel = (row: TeacherAbsence) => (row.subgroup ? `${row.className} (${row.subgroup})` : row.className);
 
-export const TEACHER_ABSENCE_HEADER = ["Enseignant", "Date", "Horaire", "Matière", "Code", "Groupe", "Salle"] as const;
+export const TEACHER_ABSENCE_HEADER = [
+  "Enseignant",
+  "Date de l’absence",
+  "Jour",
+  "Horaire",
+  "Matière",
+  "Type",
+  "Code EE",
+  "Groupe",
+  "Salle",
+] as const;
 
+// Sheet 1: one line per absence, with its date and matière. Sheet 2: count
+// per teacher.
 export function teacherAbsenceWorkbook(rows: TeacherAbsence[]) {
   const sorted = [...rows].sort(
     (a, b) => teacherLabel(a).localeCompare(teacherLabel(b), "fr") || a.date.getTime() - b.date.getTime(),
@@ -76,21 +98,24 @@ export function teacherAbsenceWorkbook(rows: TeacherAbsence[]) {
     ...sorted.map((row) => [
       teacherLabel(row),
       dayLabel(row.date),
+      weekday(row.date),
       hours(row),
       row.courseName,
+      kindLabel(row.kind),
       row.courseCode ?? "",
-      row.className,
+      groupLabel(row),
       row.room ?? "",
     ]),
   ]);
-  detail["!cols"] = [28, 12, 14, 34, 14, 16, 10].map((wch) => ({ wch }));
+  detail["!cols"] = [28, 16, 10, 14, 36, 8, 14, 18, 10].map((wch) => ({ wch }));
+  detail["!autofilter"] = { ref: `A1:I${sorted.length + 1}` };
   const counts = new Map<string, number>();
   for (const row of sorted) counts.set(teacherLabel(row), (counts.get(teacherLabel(row)) ?? 0) + 1);
-  const summary = XLSX.utils.aoa_to_sheet([["Enseignant", "Séances sans appel"], ...counts]);
+  const summary = XLSX.utils.aoa_to_sheet([["Enseignant", "Nombre d’absences"], ...counts]);
   summary["!cols"] = [{ wch: 28 }, { wch: 18 }];
   const book = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(book, summary, "Par enseignant");
-  XLSX.utils.book_append_sheet(book, detail, "Détail");
+  XLSX.utils.book_append_sheet(book, detail, "Absences");
+  XLSX.utils.book_append_sheet(book, summary, "Total par enseignant");
   return XLSX.write(book, { type: "buffer", bookType: "xlsx" }) as Buffer;
 }
 
@@ -147,7 +172,8 @@ export async function sendTeacherAbsenceDigest(now = new Date()) {
   }
   const label = dayLabel(rows[0].date);
   const lines = rows.map(
-    (row) => `${teacherLabel(row)} · ${hours(row)} · ${row.courseName} · ${row.className}${row.room ? ` · salle ${row.room}` : ""}`,
+    (row) =>
+      `${teacherLabel(row)} · ${dayLabel(row.date)} ${hours(row)} · ${row.courseName}${row.kind ? ` (${kindLabel(row.kind)})` : ""} · ${groupLabel(row)}${row.room ? ` · salle ${row.room}` : ""}`,
   );
   const appUrl = process.env.APP_URL?.replace(/\/$/, "");
   try {

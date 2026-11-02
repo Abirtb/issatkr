@@ -4,6 +4,7 @@ import { requireScheduleManager, authFailure } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { dateKey, isDayOff, scheduleDate } from "@/lib/recurrence";
 import { audit } from "@/lib/security-log";
+import { allowedKinds, kindLabel, SESSION_KINDS } from "@/lib/session-kind";
 
 const sessionSchema = z.object({
   id: z.string().min(1).optional(),
@@ -18,7 +19,16 @@ const sessionSchema = z.object({
   room: z.string().trim().max(80).optional(),
   // "" = the whole class.
   subgroup: z.string().trim().max(20).optional(),
+  // Cours, TD or TP: one the EE of the parcours plans hours for.
+  kind: z.enum(SESSION_KINDS, { message: "Choisissez le type de séance : Cours, TD ou TP" }),
 });
+
+// A Cours / TD / TP the EE plans no hours for.
+class KindError extends Error {
+  constructor(kind: string) {
+    super(`Pas de ${kindLabel(kind)} prévu pour cette matière dans le parcours (0 h dans l’élément d’enseignement).`);
+  }
+}
 
 // A one-off session on a holiday is allowed (e.g. a make-up class), with a warning.
 async function dayOffWarning(date: string) {
@@ -57,9 +67,11 @@ async function resolveReferences(input: z.infer<typeof sessionSchema>) {
     }),
     prisma.subject.findFirst({
       where: { id: input.subjectId, active: true },
+      include: { elements: { select: { parcoursId: true, hoursLecture: true, hoursTutorial: true, hoursLab: true } } },
     }),
   ]);
   if (!cls || !professor || !subject) throw new Error("INVALID_REFERENCE");
+  if (!allowedKinds(subject.elements, cls.parcoursId).includes(input.kind)) throw new KindError(input.kind);
   return { cls, professor, subject };
 }
 
@@ -116,6 +128,7 @@ export async function POST(req: Request) {
         endTime: input.endTime || null,
         room: input.room || null,
         subgroup: input.subgroup ?? "",
+        kind: input.kind,
       },
     });
     // Actor = the logged-in user (never the request body); professorId = assigned teacher.
@@ -134,7 +147,9 @@ export async function POST(req: Request) {
     const message =
       error instanceof z.ZodError
         ? error.issues[0]?.message
-        : "Séance invalide ou déjà existante";
+        : error instanceof KindError
+          ? error.message
+          : "Séance invalide ou déjà existante";
     return NextResponse.json({ error: message }, { status: 400 });
   }
 }
@@ -167,6 +182,7 @@ export async function PATCH(req: Request) {
         endTime: input.endTime || null,
         room: input.room || null,
         subgroup: input.subgroup ?? "",
+        kind: input.kind,
       },
     });
     await audit(actor, "schedule.update", { type: "session", id: session.id }, {
@@ -178,7 +194,13 @@ export async function PATCH(req: Request) {
   } catch (error) {
     const denied = authFailure(error);
     if (denied) return denied;
-    return NextResponse.json({ error: "Modification impossible" }, { status: 400 });
+    const message =
+      error instanceof z.ZodError
+        ? error.issues[0]?.message
+        : error instanceof KindError
+          ? error.message
+          : "Modification impossible";
+    return NextResponse.json({ error: message }, { status: 400 });
   }
 }
 

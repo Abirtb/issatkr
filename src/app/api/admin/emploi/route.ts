@@ -9,6 +9,7 @@ import {
   parseEmploiRows,
   parseWorkbook,
 } from "@/lib/parse-upload";
+import { parseKind } from "@/lib/session-kind";
 
 export async function POST(req: Request) {
   try {
@@ -139,6 +140,7 @@ export async function POST(req: Request) {
             courseCode: subject.code,
             endTime: e.endTime || exists.endTime,
             room: e.room || exists.room,
+            kind: parseKind(e.kind) || exists.kind,
           },
         });
         updated++;
@@ -155,6 +157,7 @@ export async function POST(req: Request) {
           startTime: e.startTime,
           endTime: e.endTime || null,
           room: e.room || null,
+          kind: parseKind(e.kind),
           professorId: professor.id,
         },
       });
