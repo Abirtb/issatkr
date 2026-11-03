@@ -1,5 +1,7 @@
 import type { AlertLevel, NotificationType } from "@prisma/client";
+import { countedSession } from "./session-kind";
 import { prisma } from "./db";
+import { isExempt } from "./student-status";
 import {
   resolveAlertEpisode,
   resolveAlertLevel,
@@ -24,14 +26,18 @@ export async function recalculateStudentSubjectAlert(
   });
   if (!threshold) return null;
 
-  const absenceCount = await prisma.attendance.count({
-    where: {
-      studentId,
-      present: false,
-      OR: [{ justification: null }, { justification: "" }],
-      session: { subjectId },
-    },
-  });
+  // Dispensé (statut D): 0 absence, so never warned or eliminated.
+  const absenceCount = isExempt(student.status)
+    ? 0
+    : await prisma.attendance.count({
+        where: {
+          studentId,
+          present: false,
+          OR: [{ justification: null }, { justification: "" }],
+          // TP sessions: absences not counted.
+          session: { subjectId, ...countedSession },
+        },
+      });
   const nextLevel: AlertLevel = resolveAlertLevel(
     absenceCount,
     threshold.eliminationCount,

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { requireSession } from "@/lib/auth";
+import { requireSession, authFailure } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { canAccessClass } from "@/lib/access";
 
@@ -22,6 +22,7 @@ export async function GET(
       include: {
         students: {
           where: { active: true },
+          select: { id: true, matricule: true, firstName: true, lastName: true },
           orderBy: [{ lastName: "asc" }, { firstName: "asc" }],
         },
         sessions: {
@@ -44,7 +45,9 @@ export async function GET(
       take: 20,
     });
     return NextResponse.json({ ...cls, history });
-  } catch {
+  } catch (error) {
+    const denied = authFailure(error);
+    if (denied) return denied;
     return NextResponse.json({ error: "Non autorisé" }, { status: 401 });
   }
 }

@@ -3,8 +3,11 @@
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { csvRow } from "@/lib/csv";
 
 type Ref = { id: string; code: string; name: string };
+// Class with its level and the subjects planned for it (cascading filters).
+type ClassRef = Ref & { levelId: string | null; subjectIds: string[] };
 type ReportRow = {
   student: {
     id: string;
@@ -21,10 +24,12 @@ type ReportRow = {
   present: number;
   total: number;
   status: "NORMAL" | "WARNING" | "ELIMINATED";
+  // Dispensé (statut D): absences always 0.
+  exempt?: boolean;
 };
 
-export function ReportsView() {
-  const [classes, setClasses] = useState<Ref[]>([]);
+export function ReportsView({ canExportOfficial = false }: { canExportOfficial?: boolean }) {
+  const [classes, setClasses] = useState<ClassRef[]>([]);
   const [subjects, setSubjects] = useState<Ref[]>([]);
   const [levels, setLevels] = useState<Ref[]>([]);
   const [rows, setRows] = useState<ReportRow[]>([]);
@@ -67,11 +72,51 @@ export function ReportsView() {
     void loadReport();
   }, [loadReport]);
 
+  // Cascading filters: level → its classes; class → its subjects; subject →
+  // the classes and levels where it is taught.
+  const classOptions = classes.filter(
+    (item) => (!levelId || item.levelId === levelId) && (!subjectId || item.subjectIds.includes(subjectId)),
+  );
+  const subjectScope = classId
+    ? classes.filter((item) => item.id === classId)
+    : classes.filter((item) => !levelId || item.levelId === levelId);
+  const subjectOptions = subjects.filter(
+    (subject) => subject.id === subjectId || subjectScope.some((item) => item.subjectIds.includes(subject.id)),
+  );
+  const levelOptions = levels.filter(
+    (level) =>
+      level.id === levelId ||
+      classes.some((item) => item.levelId === level.id && (!subjectId || item.subjectIds.includes(subjectId))),
+  );
+  // A report needs a class: keep one that fits the new filter.
+  function chooseLevel(value: string) {
+    setLevelId(value);
+    const current = classes.find((item) => item.id === classId);
+    if (value && current?.levelId !== value) {
+      setClassId(classes.find((item) => item.levelId === value)?.id ?? "");
+      setSubjectId("");
+    }
+  }
+  function chooseClass(value: string) {
+    setClassId(value);
+    const next = classes.find((item) => item.id === value);
+    if (subjectId && next && !next.subjectIds.includes(subjectId)) setSubjectId("");
+  }
+
+  // Official file (scolarité format, .xls), downloaded straight from the server.
+  function officialExportUrl(allClasses: boolean) {
+    const query = new URLSearchParams();
+    if (!allClasses && classId) query.set("classId", classId);
+    if (from) query.set("from", from);
+    if (to) query.set("to", to);
+    return `/api/admin/reports/absences?${query}`;
+  }
+
   function exportCsv() {
     const header =
       "Matricule;Nom;Prenom;Classe;Niveau;Matiere;Presences;Absences;Justifiees;Seuil;Statut\n";
     const lines = rows.map((row) =>
-      [
+      csvRow([
         row.student.matricule,
         row.student.lastName,
         row.student.firstName,
@@ -82,8 +127,8 @@ export function ReportsView() {
         row.absences,
         row.justified,
         row.threshold,
-        row.status,
-      ].join(";"),
+        row.exempt ? "DISPENSE" : row.status,
+      ]),
     );
     const blob = new Blob([`\uFEFF${header}${lines.join("\n")}`], {
       type: "text/csv;charset=utf-8",
@@ -104,23 +149,48 @@ export function ReportsView() {
             Calcul par étudiant, matière et niveau.
           </p>
         </div>
-        <Button
-          variant="secondary"
-          onClick={exportCsv}
-          disabled={!rows.length}
-        >
-          Exporter CSV
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          {canExportOfficial ? (
+            <>
+              <a
+                href={officialExportUrl(false)}
+                className="inline-flex h-10 items-center rounded-[10px] bg-gold px-4 text-sm font-medium text-navy-deep hover:brightness-105"
+              >
+                Fichier absences (classe)
+              </a>
+              <a
+                href={officialExportUrl(true)}
+                className="inline-flex h-10 items-center rounded-[10px] border border-border bg-surface px-4 text-sm font-medium hover:bg-surface-2"
+              >
+                Toutes les classes
+              </a>
+            </>
+          ) : null}
+          <Button
+            variant="secondary"
+            onClick={exportCsv}
+            disabled={!rows.length}
+          >
+            Exporter CSV
+          </Button>
+        </div>
       </div>
+      {canExportOfficial ? (
+        <p className="mt-2 text-xs text-muted">
+          Fichier absences : format scolarité (.xls), une ligne par étudiant et matière, absences non justifiées
+          sur la période choisie. « Identifiant EE » est à compléter (même valeur pour toute une matière).
+        </p>
+      ) : null}
 
       <div className="surface-card mt-5 grid gap-2 rounded-xl p-4 sm:grid-cols-2 lg:grid-cols-5">
         <select
           value={classId}
-          onChange={(event) => setClassId(event.target.value)}
+          onChange={(event) => chooseClass(event.target.value)}
           className="h-10 rounded-lg border border-border bg-surface px-3 text-sm"
+          aria-label="Classe"
         >
           <option value="">Classe</option>
-          {classes.map((item) => (
+          {classOptions.map((item) => (
             <option key={item.id} value={item.id}>
               {item.name}
             </option>
@@ -132,7 +202,7 @@ export function ReportsView() {
           className="h-10 rounded-lg border border-border bg-surface px-3 text-sm"
         >
           <option value="">Toutes les matières</option>
-          {subjects.map((item) => (
+          {subjectOptions.map((item) => (
             <option key={item.id} value={item.id}>
               {item.code} · {item.name}
             </option>
@@ -140,11 +210,12 @@ export function ReportsView() {
         </select>
         <select
           value={levelId}
-          onChange={(event) => setLevelId(event.target.value)}
+          onChange={(event) => chooseLevel(event.target.value)}
           className="h-10 rounded-lg border border-border bg-surface px-3 text-sm"
+          aria-label="Niveau"
         >
           <option value="">Tous les niveaux</option>
-          {levels.map((item) => (
+          {levelOptions.map((item) => (
             <option key={item.id} value={item.id}>
               {item.name}
             </option>
@@ -199,11 +270,13 @@ export function ReportsView() {
                 <td className="px-4 py-3">{row.justified}</td>
                 <td className="px-4 py-3">{row.threshold}</td>
                 <td className="px-4 py-3">
-                  {row.status === "ELIMINATED"
-                    ? "Éliminé"
-                    : row.status === "WARNING"
-                      ? "Avertissement"
-                      : "Normal"}
+                  {row.exempt
+                    ? "Dispensé (D)"
+                    : row.status === "ELIMINATED"
+                      ? "Éliminé"
+                      : row.status === "WARNING"
+                        ? "Avertissement"
+                        : "Normal"}
                 </td>
               </tr>
             ))}

@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { requireAdmin } from "@/lib/auth";
+import { requireAdmin, authFailure } from "@/lib/auth";
 import { prisma } from "@/lib/db";
+import { audit } from "@/lib/security-log";
 import { recalculateAlertsForStudents } from "@/lib/alerts";
 import { sendPendingNotifications } from "@/lib/mail";
 
@@ -14,10 +15,15 @@ const schema = z.object({
 export async function GET() {
   try {
     await requireAdmin();
-    const [subjects, levels, thresholds] = await Promise.all([
+    const [subjects, levels, thresholds, parcours, classes] = await Promise.all([
       prisma.subject.findMany({
         where: { active: true },
         orderBy: { name: "asc" },
+        // Links used by the Parcours / Groupe filters.
+        include: {
+          elements: { select: { parcoursId: true, semester: true } },
+          curricula: { select: { levelId: true, specialty: true } },
+        },
       }),
       prisma.academicLevel.findMany({
         where: { active: true },
@@ -27,16 +33,26 @@ export async function GET() {
         include: { subject: true, level: true },
         orderBy: [{ subject: { name: "asc" } }, { level: { name: "asc" } }],
       }),
+      prisma.parcours.findMany({
+        select: { id: true, code: true, mention: true, specialty: true },
+        orderBy: { code: "asc" },
+      }),
+      prisma.class.findMany({
+        select: { id: true, name: true, levelId: true, parcoursId: true, semester: true, level: { select: { code: true } } },
+        orderBy: { name: "asc" },
+      }),
     ]);
-    return NextResponse.json({ subjects, levels, thresholds });
-  } catch {
+    return NextResponse.json({ subjects, levels, thresholds, parcours, classes });
+  } catch (error) {
+    const denied = authFailure(error);
+    if (denied) return denied;
     return NextResponse.json({ error: "Non autorisé" }, { status: 403 });
   }
 }
 
 export async function PUT(req: Request) {
   try {
-    await requireAdmin();
+    const admin = await requireAdmin();
     const input = schema.parse(await req.json());
     const threshold = await prisma.absenceThreshold.upsert({
       where: {
@@ -59,15 +75,18 @@ export async function PUT(req: Request) {
     if (notifications.length) {
       await sendPendingNotifications(Math.min(notifications.length, 10));
     }
+    await audit(admin, "threshold.update", { type: "threshold", id: threshold.id }, { eliminationCount: threshold.eliminationCount }, req);
     return NextResponse.json(threshold);
-  } catch {
+  } catch (error) {
+    const denied = authFailure(error);
+    if (denied) return denied;
     return NextResponse.json({ error: "Seuil invalide" }, { status: 400 });
   }
 }
 
 export async function DELETE(req: Request) {
   try {
-    await requireAdmin();
+    const admin = await requireAdmin();
     const id = new URL(req.url).searchParams.get("id");
     if (!id) return NextResponse.json({ error: "ID requis" }, { status: 400 });
     const threshold = await prisma.absenceThreshold.findUnique({ where: { id } });
@@ -83,8 +102,11 @@ export async function DELETE(req: Request) {
       }),
       prisma.absenceThreshold.delete({ where: { id } }),
     ]);
+    await audit(admin, "threshold.delete", { type: "threshold", id: id }, undefined, req);
     return NextResponse.json({ ok: true });
-  } catch {
+  } catch (error) {
+    const denied = authFailure(error);
+    if (denied) return denied;
     return NextResponse.json({ error: "Suppression impossible" }, { status: 400 });
   }
 }

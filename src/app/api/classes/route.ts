@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { requireSession } from "@/lib/auth";
+import { requireSession, authFailure } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { classScope } from "@/lib/access";
 
@@ -22,7 +22,9 @@ export async function GET() {
       },
     });
     return NextResponse.json(classes);
-  } catch {
+  } catch (error) {
+    const denied = authFailure(error);
+    if (denied) return denied;
     return NextResponse.json({ error: "Non autorisé" }, { status: 401 });
   }
 }

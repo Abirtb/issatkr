@@ -3,8 +3,12 @@
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { groupYear, isGroupSubject, semesterInGroup, type GroupInfo, type SubjectLinks } from "@/lib/group-subjects";
 
 type Reference = { id: string; code: string; name: string };
+type SubjectRow = Reference & SubjectLinks;
+type ParcoursRow = { id: string; code: string; mention: string; specialty: string };
+type GroupRow = GroupInfo & { id: string };
 type Threshold = {
   id: string;
   subjectId: string;
@@ -15,7 +19,12 @@ type Threshold = {
 };
 
 export function AdminSettings() {
-  const [subjects, setSubjects] = useState<Reference[]>([]);
+  const [subjects, setSubjects] = useState<SubjectRow[]>([]);
+  const [parcoursList, setParcoursList] = useState<ParcoursRow[]>([]);
+  const [groups, setGroups] = useState<GroupRow[]>([]);
+  // Filters: a parcours, then one of its groups.
+  const [parcoursFilter, setParcoursFilter] = useState("");
+  const [groupFilter, setGroupFilter] = useState("");
   const [levels, setLevels] = useState<Reference[]>([]);
   const [thresholds, setThresholds] = useState<Threshold[]>([]);
   const [subjectId, setSubjectId] = useState("");
@@ -30,6 +39,8 @@ export function AdminSettings() {
     setSubjects(data.subjects);
     setLevels(data.levels);
     setThresholds(data.thresholds);
+    setParcoursList(data.parcours ?? []);
+    setGroups(data.classes ?? []);
     setSubjectId((current) => current || data.subjects[0]?.id || "");
     setLevelId((current) => current || data.levels[0]?.id || "");
   }, []);
@@ -45,7 +56,7 @@ export function AdminSettings() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         subjectId,
-        levelId,
+        levelId: effectiveLevelId,
         eliminationCount: limit,
       }),
     });
@@ -63,6 +74,65 @@ export function AdminSettings() {
     if (response.ok) await load();
   }
 
+  // Parcours → its groups; group → its subjects (EE of its parcours for its
+  // level) and its level; parcours alone → its EE and the levels of its groups.
+  const group = groups.find((item) => item.id === groupFilter);
+  const groupOptions = groups.filter((item) => !parcoursFilter || item.parcoursId === parcoursFilter);
+  const subjectOptions = group
+    ? subjects
+        .filter((subject) => isGroupSubject(subject, group))
+        .sort((a, b) => (semesterInGroup(a, group) ?? 99) - (semesterInGroup(b, group) ?? 99))
+    : parcoursFilter
+      ? subjects.filter((subject) => subject.elements.some((element) => element.parcoursId === parcoursFilter))
+      : subjects;
+  const parcoursLevels = new Set(groupOptions.map((item) => item.levelId).filter(Boolean));
+  const levelOptions = group?.levelId
+    ? levels.filter((level) => level.id === group.levelId)
+    : parcoursFilter && parcoursLevels.size
+      ? levels.filter((level) => parcoursLevels.has(level.id))
+      : levels;
+  // Niveau is not chosen by hand: the group's level, else the level of the
+  // subject (its EE semester → year, the groups of its parcours → level, or
+  // its programme). A choice appears only if several levels are possible.
+  const subject = subjects.find((item) => item.id === subjectId);
+  const levelNumber = (code: string) => Number(code.match(/(\d+)\s*$/)?.[1] ?? NaN);
+  const subjectLevels = new Set<string>();
+  for (const element of subject?.elements ?? []) {
+    const year = Math.ceil(element.semester / 2);
+    const fromGroups = groups.filter((item) => item.parcoursId === element.parcoursId && groupYear(item) === year);
+    if (fromGroups.length) fromGroups.forEach((item) => item.levelId && subjectLevels.add(item.levelId));
+    else levels.filter((level) => /^L/i.test(level.code) && levelNumber(level.code) === year).forEach((level) => subjectLevels.add(level.id));
+  }
+  for (const entry of subject?.curricula ?? []) subjectLevels.add(entry.levelId);
+  const levelChoices = group?.levelId
+    ? [group.levelId]
+    : [...subjectLevels].filter((id) => levelOptions.some((level) => level.id === id));
+  const effectiveLevelId = levelChoices.length === 1 ? levelChoices[0] : levelId;
+  const effectiveLevel = levels.find((level) => level.id === effectiveLevelId);
+  const filtering = Boolean(parcoursFilter || groupFilter);
+  const shownThresholds = thresholds.filter(
+    (threshold) =>
+      !filtering ||
+      (subjectOptions.some((subject) => subject.id === threshold.subjectId) &&
+        levelOptions.some((level) => level.id === threshold.levelId)),
+  );
+
+  // Keep the form on a matière / niveau that the filters still offer.
+  function applyFilters(nextParcours: string, nextGroup: string) {
+    setParcoursFilter(nextParcours);
+    setGroupFilter(nextGroup);
+    const nextGroupRow = groups.find((item) => item.id === nextGroup);
+    const nextSubjects = nextGroupRow
+      ? subjects.filter((subject) => isGroupSubject(subject, nextGroupRow))
+      : nextParcours
+        ? subjects.filter((subject) => subject.elements.some((element) => element.parcoursId === nextParcours))
+        : subjects;
+    if (nextSubjects.length && !nextSubjects.some((subject) => subject.id === subjectId)) {
+      setSubjectId(nextSubjects[0].id);
+    }
+    if (nextGroupRow?.levelId) setLevelId(nextGroupRow.levelId);
+  }
+
   return (
     <div>
       <h1 className="text-2xl font-semibold">Paramètres</h1>
@@ -70,9 +140,56 @@ export function AdminSettings() {
         Seuil d’élimination par matière et par niveau. L’avertissement est envoyé
         une absence avant ce seuil.
       </p>
+      <div className="surface-card mt-6 grid max-w-3xl gap-3 rounded-xl p-4 sm:grid-cols-3">
+        <label className="block text-sm">
+          <span className="mb-1 block text-muted">Filtrer par parcours</span>
+          <select
+            value={parcoursFilter}
+            onChange={(event) => applyFilters(event.target.value, "")}
+            className="h-10 w-full rounded-lg border border-border bg-surface px-3"
+            aria-label="Filtrer par parcours"
+          >
+            <option value="">Tous les parcours</option>
+            {parcoursList.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.code} · {[item.mention, item.specialty].filter(Boolean).join(" : ")}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="block text-sm">
+          <span className="mb-1 block text-muted">Filtrer par groupe</span>
+          <select
+            value={groupFilter}
+            onChange={(event) => applyFilters(parcoursFilter, event.target.value)}
+            className="h-10 w-full rounded-lg border border-border bg-surface px-3"
+            aria-label="Filtrer par groupe"
+          >
+            <option value="">Tous les groupes</option>
+            {groupOptions.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <div className="flex items-end text-xs text-muted">
+          {filtering ? (
+            <span>
+              {subjectOptions.length} matière(s) ·{" "}
+              <button type="button" className="underline hover:text-ink" onClick={() => applyFilters("", "")}>
+                Effacer les filtres
+              </button>
+            </span>
+          ) : (
+            "Choisissez un parcours ou un groupe pour ne voir que ses matières."
+          )}
+        </div>
+      </div>
+
       <form
         onSubmit={save}
-        className="surface-card mt-6 grid max-w-3xl gap-3 rounded-xl p-5 sm:grid-cols-3"
+        className="surface-card mt-3 grid max-w-3xl gap-3 rounded-xl p-5 sm:grid-cols-3"
       >
         <label className="block text-sm">
           <span className="mb-1 block text-muted">Matière</span>
@@ -82,28 +199,37 @@ export function AdminSettings() {
             onChange={(event) => setSubjectId(event.target.value)}
             className="h-10 w-full rounded-lg border border-border bg-surface px-3"
           >
-            {subjects.map((subject) => (
+            {subjectOptions.map((subject) => (
               <option key={subject.id} value={subject.id}>
                 {subject.code} · {subject.name}
+                {group && semesterInGroup(subject, group) ? ` (S${semesterInGroup(subject, group)})` : ""}
               </option>
             ))}
           </select>
         </label>
-        <label className="block text-sm">
-          <span className="mb-1 block text-muted">Niveau</span>
-          <select
-            required
-            value={levelId}
-            onChange={(event) => setLevelId(event.target.value)}
-            className="h-10 w-full rounded-lg border border-border bg-surface px-3"
-          >
-            {levels.map((level) => (
-              <option key={level.id} value={level.id}>
-                {level.code} · {level.name}
-              </option>
-            ))}
-          </select>
-        </label>
+        <div className="block text-sm">
+          <span className="mb-1 block text-muted">Niveau (automatique)</span>
+          {levelChoices.length === 1 ? (
+            <p className="flex h-10 items-center rounded-lg border border-border bg-surface-2 px-3 text-muted">
+              {effectiveLevel ? `${effectiveLevel.code} · ${effectiveLevel.name}` : "—"}
+            </p>
+          ) : (
+            // Rare: the level can't be deduced (several or none) → choose it.
+            <select
+              required
+              value={levelId}
+              onChange={(event) => setLevelId(event.target.value)}
+              className="h-10 w-full rounded-lg border border-border bg-surface px-3"
+              aria-label="Niveau"
+            >
+              {(levelChoices.length ? levels.filter((level) => levelChoices.includes(level.id)) : levelOptions).map((level) => (
+                <option key={level.id} value={level.id}>
+                  {level.code} · {level.name}
+                </option>
+              ))}
+            </select>
+          )}
+        </div>
         <label className="block text-sm">
           <span className="mb-1 block text-muted">Nombre d’absences</span>
           <Input
@@ -117,7 +243,7 @@ export function AdminSettings() {
         <Button
           type="submit"
           className="sm:col-span-3"
-          disabled={!subjectId || !levelId}
+          disabled={!subjectId || !effectiveLevelId}
         >
           Enregistrer
         </Button>
@@ -138,7 +264,7 @@ export function AdminSettings() {
             </tr>
           </thead>
           <tbody>
-            {thresholds.map((threshold) => (
+            {shownThresholds.map((threshold) => (
               <tr key={threshold.id} className="border-t border-border">
                 <td className="px-4 py-3">{threshold.subject.name}</td>
                 <td className="px-4 py-3">{threshold.level.name}</td>

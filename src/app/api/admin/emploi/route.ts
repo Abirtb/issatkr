@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
-import { requireScheduleManager } from "@/lib/auth";
+import { requireScheduleManager, authFailure } from "@/lib/auth";
 import { prisma } from "@/lib/db";
+import { audit, logServerError } from "@/lib/security-log";
 import {
   MAX_IMPORT_BYTES,
   MAX_IMPORT_ROWS,
@@ -8,10 +9,11 @@ import {
   parseEmploiRows,
   parseWorkbook,
 } from "@/lib/parse-upload";
+import { parseKind } from "@/lib/session-kind";
 
 export async function POST(req: Request) {
   try {
-    await requireScheduleManager();
+    const actor = await requireScheduleManager();
     const form = await req.formData();
     const file = form.get("file");
     if (!(file instanceof File)) {
@@ -65,7 +67,9 @@ export async function POST(req: Request) {
       select: { id: true, code: true, name: true },
     });
     const professorByEmail = new Map(
-      professors.map((professor) => [professor.email.toLowerCase(), professor]),
+      professors.flatMap((professor) =>
+        professor.email ? [[professor.email.toLowerCase(), professor] as const] : [],
+      ),
     );
 
     for (const e of entries) {
@@ -136,6 +140,7 @@ export async function POST(req: Request) {
             courseCode: subject.code,
             endTime: e.endTime || exists.endTime,
             room: e.room || exists.room,
+            kind: parseKind(e.kind) || exists.kind,
           },
         });
         updated++;
@@ -152,12 +157,14 @@ export async function POST(req: Request) {
           startTime: e.startTime,
           endTime: e.endTime || null,
           room: e.room || null,
+          kind: parseKind(e.kind),
           professorId: professor.id,
         },
       });
       created++;
     }
 
+    await audit(actor, "schedule.import", { type: "workbook" }, { created, updated, skipped }, req);
     return NextResponse.json({
       created,
       updated,
@@ -165,7 +172,9 @@ export async function POST(req: Request) {
       errors: errors.slice(0, 10),
     });
   } catch (e) {
-    console.error(e);
+    const denied = authFailure(e);
+    if (denied) return denied;
+    logServerError("emploi.import", e);
     return NextResponse.json({ error: "Import échoué" }, { status: 500 });
   }
 }

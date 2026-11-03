@@ -1,10 +1,24 @@
 import { NextResponse } from "next/server";
-import { requireSession } from "@/lib/auth";
+import { requireSession, authFailure } from "@/lib/auth";
 import { prisma } from "@/lib/db";
+import { audit, logServerError } from "@/lib/security-log";
 import { canAccessSession } from "@/lib/access";
 import { z } from "zod";
 import { recalculateAlertsForStudents } from "@/lib/alerts";
 import { sendPendingNotifications } from "@/lib/mail";
+import { getAttendanceWindow } from "@/lib/attendance-window";
+import { isExempt } from "@/lib/student-status";
+import { getAllowedNetworks } from "@/lib/settings";
+import { ipAllowed } from "@/lib/network";
+import { clientIp } from "@/lib/rate-limit";
+
+// Teachers take the roll call at the fac only: on one of the networks set in
+// Paramètres (none set: anywhere). Administrators are not restricted.
+async function onFacNetwork(req: Request, role: string) {
+  return role === "ADMIN" || ipAllowed(clientIp(req), await getAllowedNetworks());
+}
+const OFF_NETWORK =
+  "Appel impossible hors de la faculté : connectez-vous au WiFi de la faculté puis réessayez.";
 
 const marksSchema = z.object({
   marks: z
@@ -14,7 +28,7 @@ const marksSchema = z.object({
 });
 
 export async function GET(
-  _req: Request,
+  req: Request,
   { params }: { params: Promise<{ sessionId: string }> },
 ) {
   try {
@@ -30,14 +44,16 @@ export async function GET(
     const session = await prisma.session.findUnique({
       where: { id: sessionId },
       include: {
-        class: true,
-        attendances: true,
+        class: { select: { id: true, name: true, code: true } },
+        attendances: { select: { studentId: true, present: true } },
       },
     });
     if (!session) return NextResponse.json({ error: "Introuvable" }, { status: 404 });
 
+    // A sub-group session (TP1…) lists only the students of that sub-group.
     const students = await prisma.student.findMany({
-      where: { classId: session.classId, active: true },
+      where: { classId: session.classId, active: true, ...(session.subgroup ? { subgroup: session.subgroup } : {}) },
+      select: { id: true, matricule: true, firstName: true, lastName: true, status: true },
       orderBy: [{ lastName: "asc" }, { firstName: "asc" }],
     });
 
@@ -47,8 +63,18 @@ export async function GET(
       attendance: map[s.id] ?? null,
     }));
 
-    return NextResponse.json({ session, rows });
-  } catch {
+    const window = getAttendanceWindow(session.date, session.startTime, session.endTime);
+    return NextResponse.json({
+      session,
+      rows,
+      window,
+      serverNow: new Date(),
+      bypassWindow: user.role === "ADMIN",
+      offNetwork: !(await onFacNetwork(req, user.role)),
+    });
+  } catch (error) {
+    const denied = authFailure(error);
+    if (denied) return denied;
     return NextResponse.json({ error: "Non autorisé" }, { status: 401 });
   }
 }
@@ -72,28 +98,43 @@ export async function PUT(
 
     const session = await prisma.session.findUnique({
       where: { id: sessionId },
-      select: { classId: true, subjectId: true, finalizedAt: true },
+      select: { classId: true, subjectId: true, date: true, startTime: true, endTime: true, subgroup: true },
     });
     if (!session) {
       return NextResponse.json({ error: "Introuvable" }, { status: 404 });
     }
-    if (session.finalizedAt && user.role !== "ADMIN") {
-      return NextResponse.json(
-        { error: "Séance déjà finalisée. Contactez l’administration." },
-        { status: 409 },
-      );
+    if (!(await onFacNetwork(req, user.role))) {
+      return NextResponse.json({ error: OFF_NETWORK }, { status: 403 });
+    }
+    if (user.role !== "ADMIN") {
+      const window = getAttendanceWindow(session.date, session.startTime, session.endTime);
+      if (window?.state !== "open") {
+        return NextResponse.json(
+          {
+            error:
+              window?.state === "upcoming"
+                ? "L’appel n’est pas encore ouvert pour cette séance."
+                : "L’appel est fermé : la séance est terminée. Contactez l’administration.",
+          },
+          { status: 409 },
+        );
+      }
     }
 
     const uniqueStudentIds = [...new Set(marks.map((mark) => mark.studentId))];
-    const validStudentCount = await prisma.student.count({
+    const validStudents = await prisma.student.findMany({
       where: {
         id: { in: uniqueStudentIds },
         classId: session.classId,
         active: true,
+        ...(session.subgroup ? { subgroup: session.subgroup } : {}),
       },
+      select: { id: true, status: true },
     });
+    // Dispensé (statut D): always recorded present, whatever was sent.
+    const exempt = new Set(validStudents.filter((student) => isExempt(student.status)).map((student) => student.id));
     if (
-      validStudentCount !== uniqueStudentIds.length ||
+      validStudents.length !== uniqueStudentIds.length ||
       uniqueStudentIds.length !== marks.length
     ) {
       return NextResponse.json(
@@ -103,7 +144,9 @@ export async function PUT(
     }
 
     await prisma.$transaction([
-      ...marks.map((m) =>
+      ...marks
+        .map((m) => (exempt.has(m.studentId) ? { ...m, present: true } : m))
+        .map((m) =>
         prisma.attendance.upsert({
         where: {
           studentId_sessionId: { studentId: m.studentId, sessionId },
@@ -134,9 +177,12 @@ export async function PUT(
       }
     }
 
+    await audit(user, "attendance.record", { type: "session", id: sessionId }, { marks: marks.length, absent: marks.filter((m) => !m.present).length }, req);
     return NextResponse.json({ ok: true, count: marks.length });
   } catch (e) {
-    console.error(e);
+    const denied = authFailure(e);
+    if (denied) return denied;
+    logServerError("sessions.save", e);
     return NextResponse.json({ error: "Enregistrement échoué" }, { status: 400 });
   }
 }
