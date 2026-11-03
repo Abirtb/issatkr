@@ -1,6 +1,7 @@
 import { prisma } from "./db";
 import { resolveAlertLevel } from "./alert-policy";
 import { countedStudent, isExempt } from "./student-status";
+import { countedSession } from "./session-kind";
 
 export async function countUnjustifiedAbsences(studentId: string) {
   return prisma.attendance.count({
@@ -9,6 +10,7 @@ export async function countUnjustifiedAbsences(studentId: string) {
       present: false,
       OR: [{ justification: null }, { justification: "" }],
       student: countedStudent,
+      session: countedSession,
     },
   });
 }
@@ -67,6 +69,8 @@ export async function getAttendanceReport(filters: AttendanceReportFilters) {
       studentId: { in: students.map((student) => student.id) },
       session: {
         subjectId: { in: subjectIds },
+        // TP sessions: absences not counted.
+        ...countedSession,
         ...(filters.from || filters.to
           ? {
               date: {

@@ -4,6 +4,7 @@ import { requireScheduleManager, authFailure } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { dateKey, isDayOff, scheduleDate } from "@/lib/recurrence";
 import { audit } from "@/lib/security-log";
+import { recalculateAlertsForStudents } from "@/lib/alerts";
 import { allowedKinds, kindLabel, SESSION_KINDS } from "@/lib/session-kind";
 
 const sessionSchema = z.object({
@@ -164,7 +165,7 @@ export async function PATCH(req: Request) {
     const { subject } = await resolveReferences(input);
     const before = await prisma.session.findUnique({
       where: { id: input.id },
-      select: { weeklySlotId: true, date: true },
+      select: { weeklySlotId: true, date: true, kind: true, subjectId: true, attendances: { select: { studentId: true } } },
     });
     // An occurrence edited by hand leaves its weekly course (becomes one-off).
     if (before?.weeklySlotId) await excludeOccurrence(before.weeklySlotId, before.date);
@@ -185,6 +186,12 @@ export async function PATCH(req: Request) {
         kind: input.kind,
       },
     });
+    if (before?.attendances.length && (before.kind !== session.kind || before.subjectId !== session.subjectId)) {
+      const studentIds = before.attendances.map((item) => item.studentId);
+      for (const subjectId of new Set([before.subjectId, session.subjectId])) {
+        if (subjectId) await recalculateAlertsForStudents(studentIds, subjectId);
+      }
+    }
     await audit(actor, "schedule.update", { type: "session", id: session.id }, {
       classId: session.classId,
       professorId: session.professorId,

@@ -1,6 +1,7 @@
 import { classParts } from "./class-name";
 import { prisma } from "./db";
 import { countedStudent } from "./student-status";
+import { countedSession } from "./session-kind";
 
 // Official absence file (same columns as the scolarité template): one row per
 // student and subject (EE) of each group. "Identifiant EE" comes from the
@@ -96,7 +97,8 @@ export async function buildAbsenceExport(filters: { classId?: string; from?: Dat
       justification: null,
       // Dispensé (statut D): always 0.
       student: countedStudent,
-      session: { classId: { in: classes.map((item) => item.id) }, subjectId: { not: null }, ...dateFilter },
+      // TP sessions: absences not counted.
+      session: { classId: { in: classes.map((item) => item.id) }, subjectId: { not: null }, ...countedSession, ...dateFilter },
     },
     select: { studentId: true, session: { select: { subjectId: true } } },
   });

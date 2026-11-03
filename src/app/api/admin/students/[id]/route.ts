@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { requireAdmin, authFailure } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { isExempt } from "@/lib/student-status";
+import { absenceCounts } from "@/lib/session-kind";
 import { throttleUser } from "@/lib/rate-limit";
 import { audit } from "@/lib/security-log";
 
@@ -37,6 +38,7 @@ export async function GET(
                 date: true,
                 startTime: true,
                 courseName: true,
+                kind: true,
                 subject: { select: { id: true, code: true, name: true } },
               },
             },
@@ -60,7 +62,8 @@ export async function GET(
     >();
     for (const attendance of student.attendances) {
       const subject = attendance.session.subject;
-      if (!subject) continue;
+      // TP sessions are left out of the counts.
+      if (!subject || !absenceCounts(attendance.session.kind)) continue;
       const summary = summaries.get(subject.id) ?? {
         subject,
         present: 0,

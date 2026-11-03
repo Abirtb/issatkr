@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { absenceCounts } from "@/lib/session-kind";
 import { useEffect, useState } from "react";
 
 type Data = {
@@ -25,6 +26,7 @@ type Data = {
         startTime: string;
         subject: { name: string } | null;
         courseName: string;
+        kind: string;
       };
     }[];
   };
@@ -123,6 +125,9 @@ export function StudentHistory({ id }: { id: string }) {
                     : attendance.justification
                       ? "Absence justifiée"
                       : "Absent"}
+                  {!attendance.present && !absenceCounts(attendance.session.kind) ? (
+                    <span className="block text-xs text-muted">TP · non comptée</span>
+                  ) : null}
                 </td>
                 <td className="px-4 py-3 text-muted">
                   {attendance.justification || "—"}

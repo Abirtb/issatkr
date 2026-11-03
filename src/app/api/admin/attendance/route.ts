@@ -60,7 +60,7 @@ export async function GET(req: Request) {
       include: {
         // Listing view: identity only, no CIN/phone/e-mail.
         student: { select: { id: true, firstName: true, lastName: true, matricule: true, class: { select: { name: true } } } },
-        session: { select: { courseName: true, date: true, startTime: true } },
+        session: { select: { courseName: true, date: true, startTime: true, kind: true } },
       },
       orderBy: { session: { date: "desc" } },
       take: 200,

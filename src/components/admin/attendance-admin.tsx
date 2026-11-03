@@ -16,7 +16,7 @@ type Att = {
     matricule: string;
     class: { name: string };
   };
-  session: { courseName: string; date: string; startTime: string };
+  session: { courseName: string; date: string; startTime: string; kind: string };
 };
 
 type ClassOption = { id: string; name: string };
@@ -179,6 +179,7 @@ export function AdminAttendance() {
                     {a.session.courseName} ·{" "}
                     {new Date(a.session.date).toLocaleDateString("fr-FR")} ·{" "}
                     {a.session.startTime} · {a.student.class.name}
+                    {a.session.kind === "TP" ? " · TP (absence non comptée)" : ""}
                   </p>
                 </div>
                 <span

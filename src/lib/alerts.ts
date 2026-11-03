@@ -1,4 +1,5 @@
 import type { AlertLevel, NotificationType } from "@prisma/client";
+import { countedSession } from "./session-kind";
 import { prisma } from "./db";
 import { isExempt } from "./student-status";
 import {
@@ -33,7 +34,8 @@ export async function recalculateStudentSubjectAlert(
           studentId,
           present: false,
           OR: [{ justification: null }, { justification: "" }],
-          session: { subjectId },
+          // TP sessions: absences not counted.
+          session: { subjectId, ...countedSession },
         },
       });
   const nextLevel: AlertLevel = resolveAlertLevel(

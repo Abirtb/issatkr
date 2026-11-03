@@ -24,6 +24,12 @@ export function parseKind(value: string | null | undefined): SessionKind | "" {
   return "";
 }
 
+// Students' absences in TP sessions are recorded but never counted
+// (thresholds, warnings, éliminés, reports, absence file).
+export const UNCOUNTED_KIND: SessionKind = "TP";
+export const countedSession = { kind: { not: UNCOUNTED_KIND } };
+export const absenceCounts = (kind: string | null | undefined) => kind !== UNCOUNTED_KIND;
+
 export type ElementHours = {
   parcoursId: string;
   hoursLecture: number;
